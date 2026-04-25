@@ -37,7 +37,7 @@ class Board:
         self.is_ready = False
         self.salt = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
 
-    def draw(self, screen, font):
+    def draw(self, screen, font, show_status_text=True):
         # Dibujar cuadricula
         for y in range(BOARD_SIZE):
             for x in range(BOARD_SIZE):
@@ -63,24 +63,25 @@ class Board:
             if self._is_mouse_in_board(mouse_x, mouse_y):
                 grid_x = (mouse_x - self.x_offset) // self.cell_size
                 grid_y = (mouse_y - self.y_offset) // self.cell_size
-                
+
                 ship = self.ships[self.current_ship_index]
                 can_place = self._can_place_ship(ship.size, grid_x, grid_y, self.placing_vertical)
-                
+
                 color = SHIP_HOVER_COLOR if can_place else INVALID_COLOR
                 width = self.cell_size if self.placing_vertical else self.cell_size * ship.size
                 height = self.cell_size * ship.size if self.placing_vertical else self.cell_size
-                
+
                 rect = pygame.Rect(self.x_offset + grid_x * self.cell_size, self.y_offset + grid_y * self.cell_size, width, height)
                 pygame.draw.rect(screen, color, rect)
                 pygame.draw.rect(screen, (255, 255, 255), rect, 2)
-            
-            # Instrucciones
-            inst_text = font.render(f"Colocando barco de tamaño {self.ships[self.current_ship_index].size} (Click Dcho: Rotar)", True, (255,255,255))
-            screen.blit(inst_text, (self.x_offset, self.y_offset - 30))
-        else:
-            inst_text = font.render("¡Flota preparada! Esperando a los rivales...", True, (50,255,50))
-            screen.blit(inst_text, (self.x_offset, self.y_offset - 30))
+
+        if show_status_text:
+            text_y = self.y_offset - font.get_height() - 6
+            if not self.is_ready:
+                inst_text = font.render(f"Colocando barco de tamaño {self.ships[self.current_ship_index].size} (Click Dcho: Rotar)", True, (255,255,255))
+            else:
+                inst_text = font.render("¡Flota preparada! Esperando a los rivales...", True, (50,255,50))
+            screen.blit(inst_text, (self.x_offset, text_y))
 
     def handle_event(self, event):
         if self.is_ready:
@@ -157,7 +158,8 @@ class AttackBoard:
     def draw(self, screen, font, is_their_turn=False):
         color = (255, 255, 0) if is_their_turn else (255, 255, 255)
         lbl = font.render(f"Rival: {self.target_peer_id}", True, color)
-        screen.blit(lbl, (self.x_offset, self.y_offset - 20))
+        lbl_y = self.y_offset - font.get_height() - 4
+        screen.blit(lbl, (self.x_offset, lbl_y))
         
         for y in range(BOARD_SIZE):
             for x in range(BOARD_SIZE):
