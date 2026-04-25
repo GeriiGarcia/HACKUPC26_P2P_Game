@@ -215,26 +215,14 @@ class Board:
             self.grid[y][x] = 2
             return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
-        # Ya disparada (agua o barco dañado/hundido)
+# Ya disparada (agua o barco dañado/hundido)
         if cell == 2:
             return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
         if cell in (3, 4):
             already_hit = cell in (3, 4)
-            ship = self._ship_at(x, y)
-
-            # Si el barco ya estaba hundido (porque lo hundió otro jugador),
-            # reenviamos la info de hundido para que el atacante también lo vea con X.
-            if ship and getattr(ship, "sunk", False):
-                sunk_cells = self._ship_cells(ship)
-                sunk_cells_coord = [(cx, cy) for (cx, cy) in sunk_cells]
-                return {
-                    "hit": already_hit,
-                    "sunk": True,
-                    "sunk_cells": sunk_cells_coord,
-                    "eliminated": self.are_all_ships_sunk()
-                }
-
+            # No revelar las celdas del barco si no las golpeaste vos.
+            # Si el barco ya estaba hundido (por otro atacante), solo confirmar hit.
             return {"hit": already_hit, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
         # Impacto en barco intacto

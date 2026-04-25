@@ -647,7 +647,7 @@ def main():
                         if eliminated_now:
                             print(f"[JUEGO] {net_manager.peer_id} ha sido eliminado.")
                             announce_elimination(net_manager.peer_id, source="local")
-                        
+
             elif msg.get("action") == "RESULT":
                 target_peer = msg.get("target_peer")
                 coord = msg.get("coord")
@@ -657,14 +657,19 @@ def main():
                 sunk_cells = msg.get("sunk_cells") or []
                 eliminated_flag = msg.get("eliminated", False)
                 eliminated_peer = msg.get("eliminated_peer") or sender
-                
+
                 if target_peer == net_manager.peer_id:
                     for ab in attack_boards:
                         if ab.target_peer_id == sender:
                             if coord:
                                 ab.apply_result(coord, hit, sunk=sunk)
-                            if sunk_cells:
-                                ab.apply_sunk_cells(sunk_cells)
+                            # Solo marcar X del barco si el atacante fue el primero en hundirlo
+                            # (si sunk es True y hay celdas, significa que el rival acaba de hundir
+                            # ese barco; las X de otras celdas del barco NO se marcan porque el
+                            # atacante no las ha golpeado y no sabe que estaban en el mismo barco)
+                            if sunk and coord:
+                                ab.apply_sunk_cells([coord])
+
                             status_txt = "HUNDIDO" if sunk else ("Tocado" if hit else "Agua")
                             print(f"[JUEGO] Resultado de ataque a {sender} en {coord}: {status_txt}")
 
