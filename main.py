@@ -9,7 +9,7 @@ import time
 from pygame.locals import *
 from ui import Button, TextInput
 from network import NetworkManager
-from minecraft_core import World, Player, B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT
+from minecraft_core import World, Player, B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT, B_GRASS, B_SAND
 from minecraft_render import Renderer, BLOCK_SIZE_PX
 
 # Configuración básica
@@ -83,6 +83,18 @@ def main():
 
     def on_message_received(msg):
         msg_queue.put(msg)
+
+    def on_peer_connected(peer_id):
+        if current_state == STATE_GAME:
+            if is_host:
+                modified = world.get_modified_blocks_list() if world else []
+                net_manager.send_event("LATE_JOIN_SYNC", 
+                                       target_peer=peer_id, 
+                                       seed=world_seed, 
+                                       players=list(players.keys()) + [net_manager.peer_id], 
+                                       modified_blocks=modified)
+            if peer_id not in players:
+                players[peer_id] = Player()
 
     # Elementos UI - Menú Principal
     btn_create = Button(WIDTH//2 - 150, HEIGHT//2 - 50, 300, 50, "Crear una nueva sala", font_normal)
@@ -191,6 +203,7 @@ def main():
                         is_host = True
                         net_manager = NetworkManager(room_hash_display, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
+                        net_manager.on_peer_connected = on_peer_connected
                         net_manager.start()
                         current_state = STATE_ROOM_CREATED
                 if btn_create_back.handle_event(event):
@@ -216,6 +229,7 @@ def main():
                         is_host = False
                         net_manager = NetworkManager(room_hash, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
+                        net_manager.on_peer_connected = on_peer_connected
                         net_manager.start()
                         current_state = STATE_LOBBY
                 if btn_join_back.handle_event(event):
@@ -258,17 +272,27 @@ def main():
                 elif event.type == MOUSEBUTTONDOWN:
                     my_player = players.get(net_manager.peer_id)
                     if my_player and renderer:
+                        mx, my_y = event.pos
+
+                        # --- Hotbar slot click (left button) ---
+                        if event.button == 1:
+                            clicked_item = renderer.hotbar_slot_hit(mx, my_y, my_player.inventory)
+                            if clicked_item is not None:
+                                my_player.selected_item = clicked_item
+                                continue  # don't process as a world click
+
+                        # --- World block interaction ---
                         blocks_x = WIDTH / BLOCK_SIZE_PX
                         blocks_y = HEIGHT / BLOCK_SIZE_PX
                         cam_x = max(0, min(my_player.x - blocks_x / 2.0, 400 - blocks_x))
                         cam_y = max(0, min(my_player.y - blocks_y / 2.0, 400 - blocks_y))
-                        
-                        mx, my = event.pos
+
                         world_x = int(mx / BLOCK_SIZE_PX + cam_x)
-                        world_y = int(my / BLOCK_SIZE_PX + cam_y)
-                        
+                        world_y = int(my_y / BLOCK_SIZE_PX + cam_y)
+
                         action = "break" if event.button == 1 else ("place" if event.button == 3 else None)
                         if action:
+
                             if my_player.interact_block(world, world_x, world_y, action):
                                 new_b = world.get_block(world_x, world_y)
                                 net_manager.send_event("BLOCK_UPDATE", x=world_x, y=world_y, type=new_b)
@@ -291,6 +315,21 @@ def main():
                 renderer = Renderer(WIDTH, HEIGHT)
                 current_state = STATE_GAME
                 
+            elif action == "LATE_JOIN_SYNC" and current_state == STATE_LOBBY:
+                if msg.get("target_peer") == net_manager.peer_id:
+                    world_seed = msg.get("seed", 0)
+                    print(f"Sincronizando partida iniciada. Seed: {world_seed}")
+                    world = World(seed=world_seed)
+                    players.clear()
+                    players[net_manager.peer_id] = Player()
+                    for p in msg.get("players", []):
+                        if p != net_manager.peer_id:
+                            players[p] = Player()
+                    world.apply_modified_blocks(msg.get("modified_blocks", []))
+                    screen = set_opengl_mode()
+                    renderer = Renderer(WIDTH, HEIGHT)
+                    current_state = STATE_GAME
+
             elif action == "BLOCK_UPDATE" and current_state == STATE_GAME:
                 x = msg.get("x")
                 y = msg.get("y")

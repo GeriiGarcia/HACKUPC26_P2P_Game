@@ -12,13 +12,23 @@ B_DIRT = 1
 B_STONE = 2
 B_WOOD = 3
 B_WHEAT = 4
+B_GRASS = 5
+B_LEAF = 6
+B_SAND = 7
+B_FLOWER_RED = 8
+B_FLOWER_YELLOW = 9
 
 BLOCK_NAMES = {
     B_AIR: "Aire",
     B_DIRT: "Tierra",
     B_STONE: "Piedra",
     B_WOOD: "Madera",
-    B_WHEAT: "Trigo"
+    B_WHEAT: "Trigo",
+    B_GRASS: "Hierba",
+    B_LEAF: "Hojas",
+    B_SAND: "Arena",
+    B_FLOWER_RED: "Flor Roja",
+    B_FLOWER_YELLOW: "Flor Amarilla",
 }
 
 # Items
@@ -28,26 +38,34 @@ I_WOOD = 3
 I_WHEAT = 4
 I_BREAD = 5
 I_MEAT = 6
+I_GRASS = 5     # grass drops dirt
+I_LEAF = 6      # leaf block item
+I_SAND = 7
 T_PICKAXE = 10
 T_SHOVEL = 11
 T_AXE = 12
 
 ITEM_NAMES = {
-    I_DIRT: "Bloque de Tierra",
-    I_STONE: "Bloque de Piedra",
-    I_WOOD: "Bloque de Madera",
+    I_DIRT: "Tierra",
+    I_STONE: "Piedra",
+    I_WOOD: "Madera",
     I_WHEAT: "Trigo",
     I_BREAD: "Pan",
     I_MEAT: "Carne",
+    I_SAND: "Arena",
     T_PICKAXE: "Pico",
     T_SHOVEL: "Pala",
     T_AXE: "Hacha",
 }
 
+# Non-solid blocks (player can walk through)
+NON_SOLID = {B_AIR, B_WHEAT, B_FLOWER_RED, B_FLOWER_YELLOW}
+
 # --- World Logic ---
 class World:
     def __init__(self, seed=None):
         self.grid = [[B_AIR for _ in range(WORLD_WIDTH)] for _ in range(WORLD_HEIGHT)]
+        self.modified_blocks = {}
         if seed is None:
             self.seed = random.random() * 1000
         else:
@@ -55,34 +73,63 @@ class World:
         self._generate()
 
     def _generate(self):
-        """Procedural generation using simple noise/sine waves."""
+        """Procedural generation – Stardew Valley style rolling hills."""
+        rng = random.Random(self.seed)
         for x in range(WORLD_WIDTH):
-            # Altura del terreno base (entre 180 y 220)
-            height = int(200 + math.sin(x * 0.1 + self.seed) * 10 + math.sin(x * 0.03 + self.seed) * 20)
-            
+            # Gentler rolling hills
+            h1 = math.sin(x * 0.05 + self.seed) * 8
+            h2 = math.sin(x * 0.02 + self.seed * 0.7) * 15
+            h3 = math.sin(x * 0.13 + self.seed * 1.3) * 3
+            height = int(200 + h1 + h2 + h3)
+
             for y in range(WORLD_HEIGHT):
                 if y < height:
                     self.grid[y][x] = B_AIR
                 elif y == height:
+                    # Surface layer: grass
+                    self.grid[y][x] = B_GRASS
+                elif y < height + 6:
                     self.grid[y][x] = B_DIRT
-                    # Random wheat on top
-                    if random.random() < 0.1 and y > 0:
-                        self.grid[y-1][x] = B_WHEAT
-                    # Trees
-                    elif random.random() < 0.05 and y > 4:
-                        self._build_tree(x, y)
-                elif y < height + 10:
-                    if self.grid[y][x] == B_AIR: # No sobreescribir madera
+                elif y < height + 12:
+                    # Mix of dirt and stone transition
+                    if rng.random() < 0.4:
+                        self.grid[y][x] = B_STONE
+                    else:
                         self.grid[y][x] = B_DIRT
                 else:
-                    if self.grid[y][x] == B_AIR:
-                        self.grid[y][x] = B_STONE
+                    self.grid[y][x] = B_STONE
 
-    def _build_tree(self, x, base_y):
-        height = random.randint(3, 5)
-        for i in range(1, height + 1):
+            # Surface decorations
+            if self.grid[height][x] == B_GRASS and height > 5:
+                r = rng.random()
+                if r < 0.03:
+                    # Trees with leaf canopy
+                    self._build_tree(x, height, rng)
+                elif r < 0.06:
+                    self.grid[height - 1][x] = B_WHEAT
+                elif r < 0.08:
+                    self.grid[height - 1][x] = B_FLOWER_RED
+                elif r < 0.10:
+                    self.grid[height - 1][x] = B_FLOWER_YELLOW
+
+    def _build_tree(self, x, base_y, rng=None):
+        if rng is None:
+            rng = random.Random()
+        trunk_h = rng.randint(4, 6)
+        # Trunk
+        for i in range(1, trunk_h + 1):
             if base_y - i >= 0:
                 self.grid[base_y - i][x] = B_WOOD
+        # Leaf canopy (rounded)
+        top_y = base_y - trunk_h
+        for dy in range(-2, 2):
+            for dx in range(-2, 3):
+                lx, ly = x + dx, top_y + dy
+                if 0 <= lx < WORLD_WIDTH and 0 <= ly < WORLD_HEIGHT:
+                    if self.grid[ly][lx] == B_AIR:
+                        dist = abs(dx) + abs(dy)
+                        if dist <= 3 and not (dist == 3 and rng.random() < 0.4):
+                            self.grid[ly][lx] = B_LEAF
 
     def get_block(self, x, y):
         if 0 <= x < WORLD_WIDTH and 0 <= y < WORLD_HEIGHT:
@@ -92,8 +139,16 @@ class World:
     def set_block(self, x, y, block_type):
         if 0 <= x < WORLD_WIDTH and 0 <= y < WORLD_HEIGHT:
             self.grid[y][x] = block_type
+            self.modified_blocks[(x, y)] = block_type
             return True
         return False
+
+    def get_modified_blocks_list(self):
+        return [{"x": k[0], "y": k[1], "type": v} for k, v in self.modified_blocks.items()]
+        
+    def apply_modified_blocks(self, blocks_list):
+        for b in blocks_list:
+            self.set_block(b["x"], b["y"], b["type"])
 
 # --- Crafting ---
 CRAFTING_RECIPES = {
@@ -188,7 +243,8 @@ class Player:
         
         for y in range(min_y, max_y + 1):
             for x in range(min_x, max_x + 1):
-                if world.get_block(x, y) != B_AIR and world.get_block(x, y) != B_WHEAT:
+                block = world.get_block(x, y)
+                if block not in NON_SOLID:
                     return True
         return False
 
@@ -202,14 +258,25 @@ class Player:
             block = world.get_block(bx, by)
             if block != B_AIR:
                 world.set_block(bx, by, B_AIR)
-                # Map block ID to item ID (1-to-1 for now)
-                self.add_item(block, 1)
+                # Map block -> item drop
+                drop = block
+                if block == B_GRASS:
+                    drop = I_DIRT   # grass drops dirt
+                elif block == B_LEAF:
+                    # leaves sometimes drop nothing
+                    if random.random() < 0.3:
+                        return True  # broke but no drop
+                    drop = I_WOOD
+                elif block in (B_FLOWER_RED, B_FLOWER_YELLOW):
+                    drop = I_WHEAT  # flowers drop wheat
+                self.add_item(drop, 1)
                 return True
                 
         elif action == "place":
             # Can only place if empty
-            if world.get_block(bx, by) == B_AIR or world.get_block(bx, by) == B_WHEAT:
-                if self.selected_item in (I_DIRT, I_STONE, I_WOOD, I_WHEAT):
+            cur = world.get_block(bx, by)
+            if cur in NON_SOLID:
+                if self.selected_item in (I_DIRT, I_STONE, I_WOOD, I_WHEAT, I_SAND):
                     if self.remove_item(self.selected_item, 1):
                         world.set_block(bx, by, self.selected_item)
                         return True
