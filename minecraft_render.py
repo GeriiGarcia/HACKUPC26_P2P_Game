@@ -25,7 +25,7 @@ BLOCK_COLORS = {
     B_WHEAT:         ((0.88, 0.78, 0.30), (0.96, 0.88, 0.42)),   # golden wheat
     B_LEAF:          ((0.22, 0.52, 0.18), (0.30, 0.62, 0.24)),   # dark forest green
     B_SAND:          ((0.90, 0.82, 0.58), (0.95, 0.88, 0.65)),   # warm sand
-    B_FLOWER_RED:    ((0.85, 0.22, 0.22), (0.95, 0.35, 0.30)),   # poppy red
+    B_FLOWER_RED:    ((0.92, 0.78, 0.15), (0.98, 0.88, 0.25)),   # yellow variant
     B_FLOWER_YELLOW: ((0.95, 0.82, 0.18), (1.00, 0.90, 0.30)),   # sunflower
 }
 
