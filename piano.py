@@ -1,11 +1,16 @@
+import argparse
+import hashlib
 import json
 import math
+import os
 import queue
 import secrets
 import socket
 import string
+import subprocess
 import sys
 import threading
+import time
 from array import array
 
 import pygame
@@ -197,6 +202,108 @@ def send_json_line_socket(sock_obj, payload):
         return True
     except OSError:
         return False
+
+
+def normalize_topic_hex(raw_topic):
+    text = (raw_topic or "").strip()
+    if not text:
+        return None
+
+    if len(text) == 64 and all(ch in string.hexdigits for ch in text):
+        return text.lower()
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def start_pear_transport(topic_hex, incoming_queue, stop_event, node_cmd="node"):
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pear_p2p.js")
+    if not os.path.exists(script_path):
+        raise FileNotFoundError(f"pear_p2p.js not found at: {script_path}")
+
+    proc = subprocess.Popen(
+        [node_cmd, script_path, topic_hex],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    send_lock = threading.Lock()
+
+    def stdout_reader():
+        while not stop_event.is_set():
+            try:
+                line = proc.stdout.readline() if proc.stdout else ""
+            except Exception:
+                break
+
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.01)
+                continue
+
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            incoming_queue.put(msg)
+
+    def stderr_reader():
+        while not stop_event.is_set():
+            try:
+                line = proc.stderr.readline() if proc.stderr else ""
+            except Exception:
+                break
+
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+                continue
+
+            print(f"[pear] {line.rstrip()}", file=sys.stderr)
+
+    threading.Thread(target=stdout_reader, daemon=True).start()
+    threading.Thread(target=stderr_reader, daemon=True).start()
+
+    def send(payload):
+        if proc.poll() is not None:
+            return
+
+        line = json.dumps(payload) + "\n"
+        try:
+            with send_lock:
+                if proc.stdin:
+                    proc.stdin.write(line)
+                    proc.stdin.flush()
+        except OSError:
+            return
+
+    def close():
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+        except OSError:
+            pass
+
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    return {"send": send, "close": close}
 
 
 def socket_reader_thread(sock_obj, incoming_queue, stop_event, on_disconnect=None):
@@ -469,25 +576,58 @@ def draw_piano(screen, white_keys, black_keys, pressed_local, remote_highlights,
     screen.blit(status, (80, 44))
 
 
-def main():
-    session = prompt_network_session()
-    mode = session["mode"]
-    room_code = session["room_code"]
-    port = session["port"]
+def main(topic=None, node_cmd="node", embedded=False):
+    args_topic = topic
+    args_node_cmd = node_cmd
+
+    if args_topic is None:
+        parser = argparse.ArgumentParser(description="P2P Piano")
+        parser.add_argument(
+            "--topic",
+            help="Pear topic hex (64 chars) or room seed text. If provided, uses pear_p2p.js transport.",
+        )
+        parser.add_argument(
+            "--node-cmd",
+            default="node",
+            help="Node command used to execute pear_p2p.js (default: node)",
+        )
+        args = parser.parse_args()
+        args_topic = args.topic
+        args_node_cmd = args.node_cmd
 
     incoming_queue = queue.Queue()
     stop_event = threading.Event()
 
-    try:
-        if mode == "host":
-            transport = start_host_transport(port, incoming_queue, stop_event)
-            session_label = f"HOST {session['host_ip']}:{port} | Room: {room_code}"
-        else:
-            transport = start_join_transport(session["host_ip"], port, incoming_queue, stop_event)
-            session_label = f"JOIN {session['host_ip']}:{port} | Room: {room_code}"
-    except OSError as exc:
-        print(f"Network startup failed: {exc}", file=sys.stderr)
-        return
+    if args_topic:
+        topic_hex = normalize_topic_hex(args_topic)
+        if not topic_hex:
+            print("Invalid topic/room seed.", file=sys.stderr)
+            return
+
+        try:
+            transport = start_pear_transport(topic_hex, incoming_queue, stop_event, node_cmd=args_node_cmd)
+            mode = "pear"
+            room_code = topic_hex[:ROOM_CODE_LENGTH]
+            session_label = f"PEAR topic {topic_hex[:12]}... | Room: {room_code}"
+        except (OSError, FileNotFoundError) as exc:
+            print(f"Pear transport startup failed: {exc}", file=sys.stderr)
+            return
+    else:
+        session = prompt_network_session()
+        mode = session["mode"]
+        room_code = session["room_code"]
+        port = session["port"]
+
+        try:
+            if mode == "host":
+                transport = start_host_transport(port, incoming_queue, stop_event)
+                session_label = f"HOST {session['host_ip']}:{port} | Room: {room_code}"
+            else:
+                transport = start_join_transport(session["host_ip"], port, incoming_queue, stop_event)
+                session_label = f"JOIN {session['host_ip']}:{port} | Room: {room_code}"
+        except OSError as exc:
+            print(f"Network startup failed: {exc}", file=sys.stderr)
+            return
 
     pygame.init()
     pygame.midi.init()
@@ -608,7 +748,8 @@ def main():
 
     audio_out.close()
     pygame.midi.quit()
-    pygame.quit()
+    if not embedded:
+        pygame.quit()
 
 
 if __name__ == "__main__":
