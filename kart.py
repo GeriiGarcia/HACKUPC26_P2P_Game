@@ -324,8 +324,8 @@ def main():
 def get_tile_type(screen, x, y):
     # Map world coordinates (x,y) in tile units to tilemap indices.
     # World -> tile index: tile_index = int(world_coord - map_offset)
-    tile_x = int((WIDTH/2/tile_size - track_1_offset[0] - x)) 
-    tile_y = int((HEIGHT/2/tile_size - track_1_offset[1] - y))
+    tile_x = int(x) #int((WIDTH/2/tile_size + track_1_offset[0] + x))
+    tile_y = int(y) #int((HEIGHT/2/tile_size + track_1_offset[1] + y))
 
     font = pygame.font.SysFont(None, 24)
     text = font.render(f"X: {tile_x} Y: {tile_y}", True, (255, 255, 255))
