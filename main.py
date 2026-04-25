@@ -899,31 +899,37 @@ def main():
             if msg.get("action") == "START_GAME":
                 g = msg.get('game') or 'battleship'
                 print(f"El Host ha iniciado la partida. Juego: {g} Jugadores: {msg.get('players')}")
-                # create appropriate manager if not already
+                # ensure we clear any previous game manager before creating the new one
+                try:
+                    reset_match_state()
+                except Exception:
+                    pass
+
+                # create appropriate manager (always replace any existing)
                 if g == 'battleship':
-                    if not battleship_game:
+                    try:
                         battleship_game = BattleshipGame(net_manager)
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    except Exception:
+                        battleship_game = None
                 elif g == 'penaltis':
                     # create Penaltis manager (non-host side)
-                    if not battleship_game:
-                        try:
-                            # use players list provided by host if present
-                            players = msg.get('players') if isinstance(msg.get('players'), list) else None
-                            penalties_game = PenaltiesGame(net_manager, is_host=False, players=players)
-                        except Exception:
-                            penalties_game = None
+                    try:
+                        players = msg.get('players') if isinstance(msg.get('players'), list) else None
+                        penalties_game = PenaltiesGame(net_manager, is_host=False, players=players)
                         battleship_game = penalties_game
-                        try:
-                            if battleship_game:
-                                battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
-                        except Exception:
-                            pass
+                        if battleship_game:
+                            battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    except Exception:
+                        battleship_game = None
                 else:
                     # unknown game, fallback to battleship
-                    if not battleship_game:
+                    try:
                         battleship_game = BattleshipGame(net_manager)
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    except Exception:
+                        battleship_game = None
+
                 current_state = STATE_GAME
             elif msg.get("action") == "COMMIT_BOARD":
                 peer_id = msg.get("peerId")
@@ -933,7 +939,8 @@ def main():
             elif msg.get("action") == "GAME_SELECT":
                 # Host announced the selected game for this room
                 g = msg.get('game')
-                if g in ('battleship', 'karting'):
+                # accept known games including penaltis
+                if g in ('battleship', 'karting', 'penaltis'):
                     selected_game = g
                     print(f"[LOBBY] Juego seleccionado: {selected_game}")
                 
