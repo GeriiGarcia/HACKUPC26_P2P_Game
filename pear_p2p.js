@@ -74,8 +74,36 @@ swarm.on('error', (err) => {
   console.error('Swarm error:', err.message)
 })
 
-swarm.join(topic, { client: true, server: true })
-console.error(`Joined topic ${topicHex}`)
+swarm.on('update', () => {
+  console.error(`Swarm update: connections=${swarm.connections.size}, connecting=${swarm.connecting}`)
+})
+
+async function startDiscovery() {
+  const discovery = swarm.join(topic, { client: true, server: true })
+  console.error(`Joining topic ${topicHex}`)
+
+  // Ensures this peer is actually announced before we assume connectivity.
+  await discovery.flushed()
+  console.error('Topic announced on DHT (server mode flushed)')
+
+  // Wait for initial pending peer connections discovered right now.
+  await swarm.flush()
+  console.error('Initial peer flush completed')
+
+  // Keep announcements fresh on flaky networks.
+  setInterval(async () => {
+    try {
+      const status = swarm.status(topic)
+      if (status) await status.refresh({ client: true, server: true })
+    } catch (err) {
+      console.error('Discovery refresh failed:', err.message)
+    }
+  }, 30000).unref()
+}
+
+startDiscovery().catch((err) => {
+  console.error('Discovery startup failed:', err.message)
+})
 
 // Read local stdin as JSON lines robustly (handles chunking/newlines internally).
 const rl = readline.createInterface({
