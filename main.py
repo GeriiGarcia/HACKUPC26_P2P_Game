@@ -6,7 +6,11 @@ import queue
 import math
 from ui import Button, TextInput
 from network import NetworkManager
-from game import Board, AttackBoard
+from BatleShip import Board, AttackBoard
+try:
+    from kart import KartGame
+except Exception:
+    KartGame = None
 
 # Configuración básica
 WIDTH, HEIGHT = 800, 600
@@ -203,8 +207,21 @@ def main():
     
     # Elementos UI - Sala Creada
     room_hash_display = ""
-    btn_copy_hash = Button(WIDTH//2 - 150, HEIGHT//2 + 20, 300, 40, "Copiar Hash al Portapapeles", font_normal)
-    btn_goto_lobby = Button(WIDTH//2 - 150, HEIGHT//2 + 80, 300, 40, "Ir a la Sala de Espera", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
+    room_hash_display = ""
+    # Top area elements
+    btn_copy_hash = Button(20, 16, 220, 40, "Copiar Hash", font_normal)
+    btn_player_count = Button(WIDTH - 240, 16, 220, 40, "Players: 0", font_normal)
+    show_players_list = False
+
+    # Center/top title (drawn directly) — lobby title and hash rendered in draw loop
+
+    # Middle area: large game selection buttons
+    btn_game_battleships = Button(WIDTH//2 - 320, HEIGHT//2 - 90, 280, 160, "Battleship", font_normal, bg_color=(60,120,220), hover_color=(80,140,240))
+    btn_game_karting = Button(WIDTH//2 + 40, HEIGHT//2 - 90, 280, 160, "Karting", font_normal, bg_color=(200,60,60), hover_color=(240,80,80))
+    selected_game = None  # 'battleship'|'karting'
+
+    # Bottom: start button
+    btn_start_game = Button(WIDTH//2 - 150, HEIGHT - 80, 300, 56, "Start Selected Game", font_normal, bg_color=(50,200,100), hover_color=(50,160,80))
 
     # Elementos UI - Lobby
     btn_start_lobby = Button(WIDTH//2 - 150, HEIGHT - 100, 300, 40, "Empezar Partida", font_normal, bg_color=(50, 200, 50), hover_color=(50, 150, 50))
@@ -409,10 +426,21 @@ def main():
         btn_create_back.rect = pygame.Rect(WIDTH // 2 - btn_small_w - 8, vertical_base + 110, btn_small_w, btn_h)
         btn_create_confirm.rect = pygame.Rect(WIDTH // 2 + 8, vertical_base + 110, btn_small_w, btn_h)
 
-        # Sala creada
+        # Sala creada / responsive layout for top, middle, bottom areas
         big_btn_w = min(420, max(320, WIDTH - 90))
-        btn_copy_hash.rect = pygame.Rect(WIDTH // 2 - big_btn_w // 2, HEIGHT // 2 + 30, big_btn_w, 44)
-        btn_goto_lobby.rect = pygame.Rect(WIDTH // 2 - big_btn_w // 2, HEIGHT // 2 + 86, big_btn_w, 44)
+        # Top-left copy button
+        btn_copy_hash.rect = pygame.Rect(16, 12, min(260, WIDTH//4), 40)
+        # Top-right player count
+        btn_player_count.rect = pygame.Rect(WIDTH - 16 - min(260, WIDTH//4), 12, min(260, WIDTH//4), 40)
+
+        # Middle big buttons (side by side)
+        mid_btn_w = min(320, max(240, (WIDTH - 140) // 2))
+        mid_btn_h = min(200, max(120, HEIGHT//3))
+        btn_game_battleships.rect = pygame.Rect(WIDTH//2 - mid_btn_w - 20, HEIGHT//2 - mid_btn_h//2, mid_btn_w, mid_btn_h)
+        btn_game_karting.rect = pygame.Rect(WIDTH//2 + 20, HEIGHT//2 - mid_btn_h//2, mid_btn_w, mid_btn_h)
+
+        # Bottom start button
+        btn_start_game.rect = pygame.Rect(WIDTH//2 - 150, HEIGHT - 80, 300, 56)
 
         # Unirse a sala
         join_w = min(520, max(360, WIDTH - 90))
@@ -503,13 +531,66 @@ def main():
                     current_state = STATE_MENU
             
             elif current_state == STATE_ROOM_CREATED:
+                # Top buttons
                 if btn_copy_hash.handle_event(event):
                     if copy_to_clipboard(room_hash_display):
                         print(f"Hash copiado con éxito: {room_hash_display}")
                     else:
                         print("Error copiando: No se encontró wl-copy ni xclip en el sistema. Asegúrate de tener 'wl-clipboard' instalado.")
-                if btn_goto_lobby.handle_event(event):
-                    current_state = STATE_LOBBY
+
+                if btn_player_count.handle_event(event):
+                    show_players_list = not show_players_list
+
+                # Middle: select game
+                if btn_game_battleships.handle_event(event):
+                    selected_game = 'battleship'
+                if btn_game_karting.handle_event(event):
+                    selected_game = 'karting'
+
+                # Bottom: start selected game
+                if btn_start_game.handle_event(event):
+                    if selected_game is None:
+                        print("Select a game first (Battleship or Karting)")
+                    elif selected_game == 'battleship':
+                        # host starts battleship
+                        if net_manager:
+                            try:
+                                players_list = list(net_manager.peers.keys())
+                                net_manager.send_event("START_GAME", players=players_list)
+                            except Exception:
+                                pass
+                        # initialize battle state and go to game
+                        my_board = Board(WIDTH//2 - (12 * 30)//2, HEIGHT//2 - (12 * 30)//2)
+                        player_commits.clear()
+                        has_committed_board = False
+                        battle_phase = False
+                        attack_boards.clear()
+                        eliminated_players.clear()
+                        elimination_order.clear()
+                        all_players_sorted.clear()
+                        current_turn_index = 0
+                        game_over = False
+                        final_ranking.clear()
+                        winner_peer_id = None
+                        current_state = STATE_GAME
+                    elif selected_game == 'karting':
+                        if KartGame is None:
+                            print("KartGame not available (failed to import kart module).")
+                        elif net_manager:
+                            try:
+                                game = KartGame(net_manager=net_manager)
+                                try:
+                                    game.run()
+                                finally:
+                                    try:
+                                        net_manager.stop()
+                                    except Exception:
+                                        pass
+                                    net_manager = None
+                                    is_host = False
+                                    current_state = STATE_MENU
+                            except Exception as e:
+                                print("Failed to start KartGame:", e)
                     
             elif current_state == STATE_JOIN_ROOM:
                 input_join_name.handle_event(event)
@@ -713,24 +794,59 @@ def main():
             btn_create_back.draw(screen)
             
         elif current_state == STATE_ROOM_CREATED:
-            title = font_title.render("Sala Creada", True, BLACK)
-            title_y = max(28, HEIGHT // 5 - 60)
-            screen.blit(title, (WIDTH//2 - title.get_width()//2, title_y))
-            
-            label = font_normal.render("Comparte este Hash con tus amigos para que se unan:", True, BLACK)
-            label_y = title_y + 95
-            screen.blit(label, (WIDTH//2 - label.get_width()//2, label_y))
-            
-            # Mostrar el hash (cortado si es muy largo, pero como es SHA256 son 64 chars)
-            # Lo dividimos en dos líneas o usamos font_small
+            # Top: copy hash (left), Lobby title + hash (center), player count (right)
+            # Left: copy button
+            btn_copy_hash.draw(screen)
+
+            # Center title and hash
+            title = font_title.render("Sala creada - Lobby", True, BLACK)
+            screen.blit(title, (WIDTH//2 - title.get_width()//2, 12))
+            # hash below title (split into two lines)
             hash_surf1 = font_small.render(room_hash_display[:32], True, DARK_BLUE)
             hash_surf2 = font_small.render(room_hash_display[32:], True, DARK_BLUE)
-            screen.blit(hash_surf1, (WIDTH//2 - hash_surf1.get_width()//2, label_y + 46))
-            screen.blit(hash_surf2, (WIDTH//2 - hash_surf2.get_width()//2, label_y + 73))
-            
-            btn_copy_hash.draw(screen)
-            btn_goto_lobby.draw(screen)
-            
+            screen.blit(hash_surf1, (WIDTH//2 - hash_surf1.get_width()//2, 12 + title.get_height() + 6))
+            screen.blit(hash_surf2, (WIDTH//2 - hash_surf2.get_width()//2, 12 + title.get_height() + 6 + hash_surf1.get_height()))
+
+            # Right: player count button
+            # Update count label
+            if net_manager:
+                count = 1 + len(net_manager.peers)
+            else:
+                count = 0
+            btn_player_count.text = f"Players: {count}"
+            btn_player_count.draw(screen)
+
+            # Middle: large game selection
+            btn_game_battleships.draw(screen)
+            btn_game_karting.draw(screen)
+            # Highlight selection
+            if selected_game == 'battleship':
+                pygame.draw.rect(screen, (255,255,255), btn_game_battleships.rect, 4)
+            elif selected_game == 'karting':
+                pygame.draw.rect(screen, (255,255,255), btn_game_karting.rect, 4)
+
+            # Player list popup
+            if show_players_list:
+                # draw simple panel on the right under the player button
+                panel_w = 300
+                panel_h = 24 + (len(net_manager.peers) + 1) * 28 if net_manager else 80
+                panel_x = WIDTH - panel_w - 16
+                panel_y = 16 + btn_player_count.rect.height + 8
+                pygame.draw.rect(screen, (240,240,240), (panel_x, panel_y, panel_w, panel_h))
+                pygame.draw.rect(screen, (100,100,100), (panel_x, panel_y, panel_w, panel_h), 2)
+                # list entries
+                y = panel_y + 8
+                if net_manager:
+                    me_lbl = font_small.render(f"You: {net_manager.peer_id}", True, (30,30,30))
+                    screen.blit(me_lbl, (panel_x + 8, y))
+                    y += 28
+                    for p in net_manager.peers:
+                        lbl = font_small.render(p, True, (30,30,30))
+                        screen.blit(lbl, (panel_x + 8, y))
+                        y += 28
+
+            # Bottom: start button
+            btn_start_game.draw(screen)
         elif current_state == STATE_JOIN_ROOM:
             title = font_title.render("Unirse a la Sala", True, BLACK)
             screen.blit(title, (WIDTH//2 - title.get_width()//2, max(26, input_join_name.rect.y - 110)))
