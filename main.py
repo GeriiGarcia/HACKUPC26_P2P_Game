@@ -1,6 +1,7 @@
 import pygame
 import sys
 import hashlib
+import subprocess
 from ui import Button, TextInput
 
 # Configuración básica
@@ -25,13 +26,20 @@ def generate_room_hash(room_name):
     """Genera un hash SHA-256 a partir del nombre de la sala (Semilla)."""
     return hashlib.sha256(room_name.encode('utf-8')).hexdigest()
 
+def copy_to_clipboard(text):
+    """Intenta copiar texto al portapapeles de forma robusta en Linux (Wayland/X11)."""
+    try:
+        subprocess.run(['wl-copy'], input=text.encode('utf-8'), check=True, stderr=subprocess.DEVNULL)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        try:
+            subprocess.run(['xclip', '-selection', 'clipboard'], input=text.encode('utf-8'), check=True, stderr=subprocess.DEVNULL)
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return False
+
 def main():
     pygame.init()
-    # Inicializar el portapapeles de pygame
-    try:
-        pygame.scrap.init()
-    except Exception as e:
-        print("Aviso: No se pudo inicializar pygame.scrap (portapapeles).", e)
         
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Hundir la Flota P2P")
@@ -89,11 +97,10 @@ def main():
             
             elif current_state == STATE_ROOM_CREATED:
                 if btn_copy_hash.handle_event(event):
-                    try:
-                        pygame.scrap.put(pygame.SCRAP_TEXT, room_hash_display.encode('utf-8'))
-                        print(f"Hash copiado: {room_hash_display}")
-                    except Exception as e:
-                        print(f"Error copiando: {e}")
+                    if copy_to_clipboard(room_hash_display):
+                        print(f"Hash copiado con éxito: {room_hash_display}")
+                    else:
+                        print("Error copiando: No se encontró wl-copy ni xclip en el sistema. Asegúrate de tener 'wl-clipboard' instalado.")
                 if btn_start_game.handle_event(event):
                     current_state = STATE_GAME # Iniciar la partida
                     
