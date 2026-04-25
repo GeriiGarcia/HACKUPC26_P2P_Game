@@ -873,7 +873,7 @@ def main():
                     for i, player in enumerate(ranking_lines, start=1):
                         is_me = (net_manager and player == net_manager.peer_id)
                         c = (255, 255, 150) if is_me else (240, 240, 240)
-                        line = font_small.render(f"{pos_label(i)}  {player}" + ("  (vos)" if is_me else ""), True, c)
+                        line = font_small.render(f"{pos_label(i)}  {player}" + ("  (tú)" if is_me else ""), True, c)
                         screen.blit(line, (panel_x + 36, start_y + (i - 1) * line_h))
 
                     if net_manager and net_manager.peer_id in ranking_lines:
