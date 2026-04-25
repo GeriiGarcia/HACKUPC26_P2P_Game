@@ -533,9 +533,16 @@ def main():
         elif current_state == STATE_GAME:
             dt = clock.get_time() / 1000.0
             my_player = players.get(net_manager.peer_id)
+            if world:
+                for pid, p in players.items():
+                    if pid == net_manager.peer_id:
+                        p.update(dt, world, input_dx, input_jump)
+                    else:
+                        # Interpolación / Client-side prediction para movimiento fluido
+                        p.x += p.vx * dt
+                        p.y += p.vy * dt
+                        
             if my_player and world:
-                my_player.update(dt, world, input_dx, input_jump)
-                
                 # Send position to other players
                 now = time.time()
                 if now - last_move_send > 0.05: # Send 20 times a second
