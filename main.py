@@ -101,12 +101,21 @@ def main():
     msg_queue = queue.Queue()
     battleship_game = None
 
+    # Chat state for lobby
+    chat_messages = []  # list of (peer_id, text)
+    chat_input = None
+    btn_send_chat = None
+
     # Create a window and fonts used across the UI
     screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
     clock = pygame.time.Clock()
     font_small = pygame.font.SysFont(None, 18)
     font_normal = pygame.font.SysFont(None, 24)
     font_title = pygame.font.SysFont(None, 40)
+
+    # Chat UI (create after fonts exist)
+    chat_input = TextInput(WIDTH - 360, HEIGHT - 80, 340, 40, font_normal)
+    btn_send_chat = Button(WIDTH - 120, HEIGHT - 80, 100, 40, "Enviar", font_small, bg_color=BLUE)
 
     # The rest of the original file assumes many variables exist and will set them.
     # We'll continue executing the file from here (the remainder of the file)
@@ -120,8 +129,31 @@ def main():
 
     btn_copy_hash = Button(0, 0, 200, 40, "Copiar Hash", font_small)
     btn_player_count = Button(0, 0, 160, 40, "Players: 0", font_small)
-    btn_game_battleships = Button(0, 0, 200, 160, "Battleships", font_normal, bg_color=(80,150,255))
-    btn_game_karting = Button(0, 0, 200, 160, "Karting", font_normal, bg_color=(200,80,80))
+    # Define available games (8 total). Each entry: (display_text, game_key)
+    game_definitions = [
+        ("Battleships", "battleship"),
+        ("Karting", "karting"),
+        ("Game 3", "game3"),
+        ("Game 4", "game4"),
+        ("Game 5", "game5"),
+        ("Game 6", "game6"),
+        ("Game 7", "game7"),
+        ("Game 8", "game8"),
+    ]
+
+    # Create Button objects for all games (will be positioned per-page in update_ui_layout)
+    game_buttons = []
+    for text, key in game_definitions:
+        b = Button(0, 0, 200, 160, text, font_normal, bg_color=(120, 140, 200))
+        b._game_key = key
+        game_buttons.append(b)
+
+    # Pagination controls for game list
+    page_index = 0
+    games_per_page = 4  # 2 columns x 2 rows
+    total_pages = (len(game_buttons) + games_per_page - 1) // games_per_page
+    btn_prev_page = Button(0, 0, 120, 40, "Prev", font_small)
+    btn_next_page = Button(0, 0, 120, 40, "Next", font_small)
     btn_start_game = Button(0, 0, 300, 56, "Start", font_normal, bg_color=BLUE)
 
     btn_start_lobby = Button(0, 0, 300, 44, "Iniciar partida", font_normal, bg_color=BLUE)
@@ -137,6 +169,7 @@ def main():
     selected_game = None
     show_players_list = False
     room_hash_display = ""
+    is_host = False
     
     # Elemento UI - Fin de partida
     btn_end_to_menu = Button(WIDTH//2 - 140, HEIGHT - 80, 280, 44, "Volver al menú principal", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
@@ -149,6 +182,99 @@ def main():
 
     def clamp_window_size(w, h):
         return max(MIN_WIDTH, w), max(MIN_HEIGHT, h)
+
+    # Focus/navigation helpers for TextInput fields
+    def get_inputs_for_state(state):
+        if state == STATE_CREATE_ROOM:
+            return [input_create_name, input_create_room]
+        if state == STATE_JOIN_ROOM:
+            return [input_join_name, input_join_room]
+        if state in (STATE_LOBBY, STATE_ROOM_CREATED):
+            # chat is available in lobby/room
+            return [chat_input]
+        return []
+
+    def focus_next_input(state):
+        inputs = [i for i in get_inputs_for_state(state) if i is not None]
+        if not inputs:
+            return
+        # find current active
+        active_idx = None
+        for idx, inp in enumerate(inputs):
+            if getattr(inp, 'is_active', False):
+                active_idx = idx
+                break
+        # move to next or unfocus if last
+        if active_idx is None:
+            # focus first
+            for inp in inputs:
+                inp.is_active = False
+            inputs[0].is_active = True
+        else:
+            # unset current
+            inputs[active_idx].is_active = False
+            if active_idx + 1 < len(inputs):
+                inputs[active_idx + 1].is_active = True
+            else:
+                # if last, unfocus all
+                for inp in inputs:
+                    inp.is_active = False
+
+    def handle_enter_as_confirm(state):
+        global net_manager, is_host
+        nonlocal current_state, room_hash_display
+        # If chat input is active, send chat
+        if state in (STATE_LOBBY, STATE_ROOM_CREATED):
+            if chat_input and getattr(chat_input, 'is_active', False):
+                text = chat_input.text.strip()
+                if text and net_manager:
+                    try:
+                        net_manager.send_event('CHAT', text=text)
+                    except Exception:
+                        pass
+                    chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                    chat_input.text = ""
+                return
+
+        # Create room confirm (same behavior as clicking create)
+        if state == STATE_CREATE_ROOM:
+            room_name = input_create_room.text.strip()
+            player_name = input_create_name.text.strip()
+            if room_name and player_name:
+                # ensure the shared room hash variable is updated for UI and copy
+                room_hash_display = generate_room_hash(room_name)
+                is_host = True
+                try:
+                    net_manager = NetworkManager(room_hash_display, peer_id=player_name)
+                    net_manager.on_message_received = on_message_received
+                    def on_peer_connected(pid):
+                        try:
+                            if selected_game and net_manager:
+                                net_manager.send_event("GAME_SELECT", game=selected_game)
+                        except Exception:
+                            pass
+                    net_manager.on_peer_connected = on_peer_connected
+                    net_manager.start()
+                    current_state = STATE_ROOM_CREATED
+                except Exception:
+                    net_manager = None
+
+        # Join room confirm (same behavior as clicking join)
+        if state == STATE_JOIN_ROOM:
+            room_hash = input_join_room.text.strip()
+            player_name = input_join_name.text.strip()
+            if room_hash and player_name:
+                is_host = False
+                try:
+                    net_manager = NetworkManager(room_hash, peer_id=player_name)
+                    net_manager.on_message_received = on_message_received
+                    def on_peer_connected_stub(pid):
+                        return
+                    net_manager.on_peer_connected = on_peer_connected_stub
+                    net_manager.start()
+                    current_state = STATE_LOBBY
+                except Exception:
+                    net_manager = None
 
     def reset_match_state():
         global battleship_game
@@ -343,14 +469,76 @@ def main():
         # Top-right player count
         btn_player_count.rect = pygame.Rect(WIDTH - 16 - min(260, WIDTH//4), 12, min(260, WIDTH//4), 40)
 
-        # Middle big buttons (side by side)
-        mid_btn_w = min(320, max(240, (WIDTH - 140) // 2))
-        mid_btn_h = min(200, max(120, HEIGHT//3))
-        btn_game_battleships.rect = pygame.Rect(WIDTH//2 - mid_btn_w - 20, HEIGHT//2 - mid_btn_h//2, mid_btn_w, mid_btn_h)
-        btn_game_karting.rect = pygame.Rect(WIDTH//2 + 20, HEIGHT//2 - mid_btn_h//2, mid_btn_w, mid_btn_h)
+        # Middle: paginated game buttons (2 columns x 2 rows), avoid chat area on right
+        chat_w = 340
+        chat_margin = 20
+        chat_x = WIDTH - chat_w - chat_margin
+        content_left = 20
+        content_right = chat_x - 20
+        content_width = max(200, content_right - content_left)
+        # button size responsive to content width
+        col_w = min(420, max(240, (content_width - 40) // 2))
+        row_h = min(200, max(120, HEIGHT // 6))
+        gap_x = 40
+        gap_y = 20
+        col_x1 = content_left
+        col_x2 = col_x1 + col_w + gap_x
+        total_rows_h = 2 * row_h + gap_y
+        start_y = max(120, HEIGHT // 2 - total_rows_h // 2)
+        row_y0 = start_y
+        row_y1 = start_y + row_h + gap_y
 
-        # Bottom start button
-        btn_start_game.rect = pygame.Rect(WIDTH//2 - 150, HEIGHT - 80, 300, 56)
+        # Position visible buttons for current page
+        try:
+            start = page_index * games_per_page
+            for i in range(games_per_page):
+                idx = start + i
+                if idx < len(game_buttons):
+                    b = game_buttons[idx]
+                    col = i % 2
+                    row = i // 2
+                    x = col_x1 if col == 0 else col_x2
+                    y = row_y0 if row == 0 else row_y1
+                    b.rect = pygame.Rect(x, y, col_w, row_h)
+                else:
+                    # hide off-page buttons
+                    pass
+        except Exception:
+            pass
+
+        # Bottom start button (centered between content and chat)
+        center_x = (content_left + content_right) // 2
+        btn_start_game.rect = pygame.Rect(center_x - 150, HEIGHT - 80, 300, 56)
+
+        # Chat input and send button (right side)
+        chat_w = 340
+        chat_h = 200
+        chat_margin = 20
+        chat_x = WIDTH - chat_w - chat_margin
+        chat_y = max(120, 120)
+        # place input at bottom-right
+        if 'chat_input' in locals() or True:
+            try:
+                chat_input.rect.x = chat_x
+                chat_input.rect.w = chat_w
+                chat_input.rect.y = HEIGHT - 80
+                chat_input.rect.h = 40
+            except Exception:
+                pass
+        try:
+            btn_send_chat.rect.x = chat_x + chat_w - 100
+            btn_send_chat.rect.y = HEIGHT - 80
+            btn_send_chat.rect.w = 100
+            btn_send_chat.rect.h = 40
+        except Exception:
+            pass
+
+        # Pagination buttons (Prev/Next)
+        try:
+            btn_prev_page.rect = pygame.Rect(content_left, HEIGHT - 80, 120, 40)
+            btn_next_page.rect = pygame.Rect(content_right - 120, HEIGHT - 80, 120, 40)
+        except Exception:
+            pass
 
         # Unirse a sala
         join_w = min(520, max(360, WIDTH - 90))
@@ -403,7 +591,8 @@ def main():
 
     running = True
     while running:
-        screen.fill(GRAY)
+        # Always use white background per user request
+        screen.fill(WHITE)
         update_ui_layout()
         
         for event in pygame.event.get():
@@ -415,6 +604,15 @@ def main():
                     WIDTH, HEIGHT = new_w, new_h
                     screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
                     update_ui_layout()
+
+            # Global keyboard navigation: Tab to cycle inputs, Enter to confirm
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_TAB:
+                    focus_next_input(current_state)
+                    continue
+                if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                    handle_enter_as_confirm(current_state)
+                    continue
             
             if current_state == STATE_MENU:
                 if btn_create.handle_event(event):
@@ -435,12 +633,47 @@ def main():
                         is_host = True
                         net_manager = NetworkManager(room_hash_display, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
+                        # notify when peers connect so host can share selected game
+                        def on_peer_connected(pid):
+                            try:
+                                if selected_game and net_manager:
+                                    net_manager.send_event("GAME_SELECT", game=selected_game)
+                            except Exception:
+                                pass
+                        net_manager.on_peer_connected = on_peer_connected
                         net_manager.start()
                         current_state = STATE_ROOM_CREATED
                 if btn_create_back.handle_event(event):
                     current_state = STATE_MENU
             
             elif current_state == STATE_ROOM_CREATED:
+                # Chat input events (allow typing in chat while in room)
+                try:
+                    chat_input.handle_event(event)
+                except Exception:
+                    pass
+                if event.type == pygame.KEYDOWN:
+                    if getattr(chat_input, 'is_active', False) and event.key == pygame.K_RETURN:
+                        text = chat_input.text.strip()
+                        if text and net_manager:
+                            try:
+                                net_manager.send_event('CHAT', text=text)
+                            except Exception:
+                                pass
+                            chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                            chat_input.text = ""
+                try:
+                    if btn_send_chat.handle_event(event):
+                        text = chat_input.text.strip()
+                        if text and net_manager:
+                            try:
+                                net_manager.send_event('CHAT', text=text)
+                            except Exception:
+                                pass
+                            chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                            chat_input.text = ""
+                except Exception:
+                    pass
                 # Top buttons
                 if btn_copy_hash.handle_event(event):
                     if copy_to_clipboard(room_hash_display):
@@ -451,11 +684,31 @@ def main():
                 if btn_player_count.handle_event(event):
                     show_players_list = not show_players_list
 
-                # Middle: select game
-                if btn_game_battleships.handle_event(event):
-                    selected_game = 'battleship'
-                if btn_game_karting.handle_event(event):
-                    selected_game = 'karting'
+                # Middle: select game (paginated)
+                try:
+                    start = page_index * games_per_page
+                    for i in range(games_per_page):
+                        idx = start + i
+                        if idx < len(game_buttons):
+                            b = game_buttons[idx]
+                            if b.handle_event(event):
+                                selected_game = getattr(b, '_game_key', None)
+                                if net_manager and selected_game:
+                                    try:
+                                        net_manager.send_event("GAME_SELECT", game=selected_game)
+                                    except Exception:
+                                        pass
+                except Exception:
+                    pass
+
+                # Pagination controls
+                try:
+                    if btn_prev_page.handle_event(event):
+                        page_index = max(0, page_index - 1)
+                    if btn_next_page.handle_event(event):
+                        page_index = min(total_pages - 1, page_index + 1)
+                except Exception:
+                    pass
 
                 # Bottom: start selected game
                 if btn_start_game.handle_event(event):
@@ -503,12 +756,45 @@ def main():
                         is_host = False
                         net_manager = NetworkManager(room_hash, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
+                        # when we connect, let host know we're here (host may respond with GAME_SELECT via on_peer_connected)
+                        def on_peer_connected_stub(pid):
+                            # no-op for joiners
+                            return
+                        net_manager.on_peer_connected = on_peer_connected_stub
                         net_manager.start()
                         current_state = STATE_LOBBY
                 if btn_join_back.handle_event(event):
                     current_state = STATE_MENU
 
             elif current_state == STATE_LOBBY:
+                # Chat input events in lobby
+                try:
+                    chat_input.handle_event(event)
+                except Exception:
+                    pass
+                if event.type == pygame.KEYDOWN:
+                    if getattr(chat_input, 'is_active', False) and event.key == pygame.K_RETURN:
+                        text = chat_input.text.strip()
+                        if text and net_manager:
+                            try:
+                                net_manager.send_event('CHAT', text=text)
+                            except Exception:
+                                pass
+                            chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                            chat_input.text = ""
+                try:
+                    if btn_send_chat.handle_event(event):
+                        text = chat_input.text.strip()
+                        if text and net_manager:
+                            try:
+                                net_manager.send_event('CHAT', text=text)
+                            except Exception:
+                                pass
+                            chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                            chat_input.text = ""
+                except Exception:
+                    pass
+
                 if is_host and btn_start_lobby.handle_event(event):
                     # El host decide empezar
                     players_list = list(net_manager.peers.keys())
@@ -544,13 +830,24 @@ def main():
         while not msg_queue.empty():
             msg = msg_queue.get()
             # If battleship_game is active, let it handle relevant actions
+            # First, always handle lobby chat messages globally
+            action = msg.get('action')
+            if action == 'CHAT':
+                sender = msg.get('peerId') or msg.get('peer_id') or 'unknown'
+                text = msg.get('text') or msg.get('message') or ''
+                chat_messages.append((sender, text))
+                # keep chat length reasonable
+                if len(chat_messages) > 200:
+                    chat_messages.pop(0)
+                # continue processing other handlers as well
+
+            # If a Battleship manager is active, delegate to it (it may also handle game-related messages)
             if battleship_game:
                 try:
                     battleship_game.on_network_message(msg)
                 except Exception:
                     pass
-                # allow other message handlers to run below if needed
-                continue
+                # continue to other handlers below where appropriate
             # fallback inline handling (kept for compatibility if battleship_game not created)
             if msg.get("action") == "START_GAME":
                 print(f"El Host ha iniciado la partida. Jugadores: {msg.get('players')}")
@@ -564,6 +861,12 @@ def main():
                 b_hash = msg.get("board_hash")
                 player_commits[peer_id] = b_hash
                 print(f"[JUEGO] El jugador {peer_id} ha fijado su flota.")
+            elif msg.get("action") == "GAME_SELECT":
+                # Host announced the selected game for this room
+                g = msg.get('game')
+                if g in ('battleship', 'karting'):
+                    selected_game = g
+                    print(f"[LOBBY] Juego seleccionado: {selected_game}")
                 
             elif msg.get("action") == "FIRE_MULTI":
                 targets = msg.get("targets") or []
@@ -714,14 +1017,32 @@ def main():
             btn_player_count.text = f"Players: {count}"
             btn_player_count.draw(screen)
 
-            # Middle: large game selection
-            btn_game_battleships.draw(screen)
-            btn_game_karting.draw(screen)
-            # Highlight selection
-            if selected_game == 'battleship':
-                pygame.draw.rect(screen, (255,255,255), btn_game_battleships.rect, 4)
-            elif selected_game == 'karting':
-                pygame.draw.rect(screen, (255,255,255), btn_game_karting.rect, 4)
+            # Middle: paginated game buttons
+            try:
+                start = page_index * games_per_page
+                for i in range(games_per_page):
+                    idx = start + i
+                    if idx < len(game_buttons):
+                        b = game_buttons[idx]
+                        b.draw(screen)
+                        # highlight selection
+                        if getattr(b, '_game_key', None) == selected_game:
+                            pygame.draw.rect(screen, (255,255,255), b.rect, 4)
+            except Exception:
+                pass
+
+            # Pagination UI
+            try:
+                btn_prev_page.draw(screen)
+                btn_next_page.draw(screen)
+                chat_w = 340
+                chat_margin = 20
+                content_left = 20
+                content_right = WIDTH - chat_w - chat_margin - 20
+                page_lbl = font_small.render(f"Page {page_index+1}/{total_pages}", True, (40,40,40))
+                screen.blit(page_lbl, ( (content_left + content_right)//2 - page_lbl.get_width()//2, HEIGHT - 74 ))
+            except Exception:
+                pass
 
             # Player list popup
             if show_players_list:
@@ -745,6 +1066,52 @@ def main():
 
             # Bottom: start button
             btn_start_game.draw(screen)
+            # Chat panel (right side)
+            # Chat panel (right side)
+            panel_w = 340
+            panel_x = WIDTH - panel_w - 20
+            panel_y = 120
+            panel_h = HEIGHT - 160
+            pygame.draw.rect(screen, (245,245,245), (panel_x, panel_y, panel_w, panel_h))
+            pygame.draw.rect(screen, (160,160,160), (panel_x, panel_y, panel_w, panel_h), 2)
+            # messages area
+            msg_area_h = panel_h - 60
+            max_lines = max(3, msg_area_h // (font_small.get_height() + 4))
+            # draw from bottom up
+            start_y = panel_y + msg_area_h - 8
+            for sender, text in reversed(chat_messages[-max_lines:]):
+                line = f"{sender}: {text}"
+                surf = font_small.render(line, True, (20,20,20))
+                start_y -= surf.get_height() + 4
+                screen.blit(surf, (panel_x + 8, start_y))
+            # draw input and send
+            try:
+                chat_input.draw(screen)
+                btn_send_chat.draw(screen)
+            except Exception:
+                pass
+                
+                # Handle chat input events
+                # (chat_input handles focus on mouse down; we check ENTER here)
+                if event.type == pygame.KEYDOWN:
+                    if getattr(chat_input, 'is_active', False) and event.key == pygame.K_RETURN:
+                        text = chat_input.text.strip()
+                        if text and net_manager:
+                            try:
+                                net_manager.send_event('CHAT', text=text)
+                            except Exception:
+                                pass
+                            chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                            chat_input.text = ""
+                if btn_send_chat.handle_event(event):
+                    text = chat_input.text.strip()
+                    if text and net_manager:
+                        try:
+                            net_manager.send_event('CHAT', text=text)
+                        except Exception:
+                            pass
+                        chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                        chat_input.text = ""
         elif current_state == STATE_JOIN_ROOM:
             title = font_title.render("Unirse a la Sala", True, BLACK)
             screen.blit(title, (WIDTH//2 - title.get_width()//2, max(26, input_join_name.rect.y - 110)))
@@ -763,6 +1130,13 @@ def main():
         elif current_state == STATE_LOBBY:
             title = font_title.render("Sala de Espera", True, BLACK)
             screen.blit(title, (WIDTH//2 - title.get_width()//2, 50))
+            # Show currently selected game (if any)
+            if selected_game:
+                label_text = "Juego seleccionado: " + ("Battleship" if selected_game == 'battleship' else "Karting")
+                lbl_sel = font_normal.render(label_text, True, DARK_BLUE)
+                screen.blit(lbl_sel, (WIDTH//2 - lbl_sel.get_width()//2, 100))
+                sel_hint = font_small.render("El host ha elegido este juego.", True, (80,80,80))
+                screen.blit(sel_hint, (WIDTH//2 - sel_hint.get_width()//2, 100 + lbl_sel.get_height() + 4))
             
             # Listar jugadores
             list_top = 150
@@ -793,6 +1167,47 @@ def main():
             else:
                 wait_lbl = font_normal.render("Esperando a que el host inicie la partida...", True, (100, 100, 100))
                 screen.blit(wait_lbl, (WIDTH//2 - wait_lbl.get_width()//2, HEIGHT - 100))
+
+            # Chat panel (right side) - same layout as room created
+            panel_w = 340
+            panel_x = WIDTH - panel_w - 20
+            panel_y = 120
+            panel_h = HEIGHT - 160
+            pygame.draw.rect(screen, (245,245,245), (panel_x, panel_y, panel_w, panel_h))
+            pygame.draw.rect(screen, (160,160,160), (panel_x, panel_y, panel_w, panel_h), 2)
+            msg_area_h = panel_h - 60
+            max_lines = max(3, msg_area_h // (font_small.get_height() + 4))
+            start_y = panel_y + msg_area_h - 8
+            for sender, text in reversed(chat_messages[-max_lines:]):
+                line = f"{sender}: {text}"
+                surf = font_small.render(line, True, (20,20,20))
+                start_y -= surf.get_height() + 4
+                screen.blit(surf, (panel_x + 8, start_y))
+            try:
+                chat_input.draw(screen)
+                btn_send_chat.draw(screen)
+            except Exception:
+                pass
+            # Chat input events
+            if event.type == pygame.KEYDOWN:
+                if getattr(chat_input, 'is_active', False) and event.key == pygame.K_RETURN:
+                    text = chat_input.text.strip()
+                    if text and net_manager:
+                        try:
+                            net_manager.send_event('CHAT', text=text)
+                        except Exception:
+                            pass
+                        chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                        chat_input.text = ""
+            if btn_send_chat.handle_event(event):
+                text = chat_input.text.strip()
+                if text and net_manager:
+                    try:
+                        net_manager.send_event('CHAT', text=text)
+                    except Exception:
+                        pass
+                    chat_messages.append((getattr(net_manager, 'peer_id', 'You'), text))
+                    chat_input.text = ""
 
         elif current_state == STATE_GAME:
             screen.fill((20, 20, 40))
