@@ -663,12 +663,9 @@ def main():
                         if ab.target_peer_id == sender:
                             if coord:
                                 ab.apply_result(coord, hit, sunk=sunk)
-                            # Solo marcar X del barco si el atacante fue el primero en hundirlo
-                            # (si sunk es True y hay celdas, significa que el rival acaba de hundir
-                            # ese barco; las X de otras celdas del barco NO se marcan porque el
-                            # atacante no las ha golpeado y no sabe que estaban en el mismo barco)
-                            if sunk and coord:
-                                ab.apply_sunk_cells([coord])
+                            # Cuando hundís un barco, aplicar X en todas las celdas del barco
+                            if sunk and sunk_cells:
+                                ab.apply_sunk_cells(sunk_cells)
 
                             status_txt = "HUNDIDO" if sunk else ("Tocado" if hit else "Agua")
                             print(f"[JUEGO] Resultado de ataque a {sender} en {coord}: {status_txt}")
