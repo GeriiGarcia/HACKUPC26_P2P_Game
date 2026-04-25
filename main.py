@@ -1,10 +1,9 @@
-import hashlib
 import json
 import math
 import queue
 import secrets
+import socket
 import string
-import subprocess
 import sys
 import threading
 from array import array
@@ -24,6 +23,7 @@ BLACK_KEY_H = 140
 
 HIGHLIGHT_MS = 300
 ROOM_CODE_LENGTH = 6
+DEFAULT_LAN_PORT = 5000
 
 NOTE_MIN = 60  # C4
 NOTE_MAX = 77  # F5 (C4 + 1.5 octaves)
@@ -190,92 +190,236 @@ def get_note_from_mouse(pos, white_keys, black_keys):
     return None
 
 
-def spawn_p2p_process(topic_hex):
-    return subprocess.Popen(
-        ["node", "pear_p2p.js", topic_hex],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-
-
-def stdout_reader_thread(proc, incoming_queue, stop_event):
-    """
-    Read subprocess stdout in a dedicated thread.
-
-    Why this is needed:
-    - readline() blocks until a full line arrives.
-    - If we do this in the pygame loop, rendering/input/audio would freeze while waiting.
-    - A separate thread can block safely and push parsed JSON into a queue.
-    - The main pygame loop stays responsive and only polls queue.get_nowait().
-    """
-    while not stop_event.is_set():
-        line = proc.stdout.readline()
-        if line == "":
-            break
-
-        line = line.strip()
-        if not line:
-            continue
-
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        incoming_queue.put(msg)
-
-
-def stderr_reader_thread(proc, stop_event):
-    while not stop_event.is_set():
-        line = proc.stderr.readline()
-        if line == "":
-            break
-        if line.strip():
-            print(f"[pear] {line.strip()}", file=sys.stderr)
-
-
-def send_json_line(proc, payload):
-    if proc.stdin is None:
-        return
+def send_json_line_socket(sock_obj, payload):
     try:
-        proc.stdin.write(json.dumps(payload) + "\n")
-        proc.stdin.flush()
-    except (BrokenPipeError, OSError):
-        pass
+        data = (json.dumps(payload) + "\n").encode("utf-8")
+        sock_obj.sendall(data)
+        return True
+    except OSError:
+        return False
+
+
+def socket_reader_thread(sock_obj, incoming_queue, stop_event, on_disconnect=None):
+    """Read newline-delimited JSON from a socket in a background thread."""
+    buffer = ""
+    sock_obj.settimeout(0.5)
+
+    while not stop_event.is_set():
+        try:
+            chunk = sock_obj.recv(4096)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+
+        if not chunk:
+            break
+
+        buffer += chunk.decode("utf-8", errors="ignore")
+        while True:
+            idx = buffer.find("\n")
+            if idx == -1:
+                break
+
+            line = buffer[:idx].strip()
+            buffer = buffer[idx + 1 :]
+            if not line:
+                continue
+
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            incoming_queue.put(msg)
+
+    if on_disconnect:
+        on_disconnect(sock_obj)
+
+
+def start_host_transport(port, incoming_queue, stop_event):
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_sock.bind(("0.0.0.0", port))
+    server_sock.listen()
+    server_sock.settimeout(0.5)
+
+    clients = set()
+    clients_lock = threading.Lock()
+
+    def remove_client(client_sock):
+        with clients_lock:
+            clients.discard(client_sock)
+        try:
+            client_sock.close()
+        except OSError:
+            pass
+
+    def accept_loop():
+        while not stop_event.is_set():
+            try:
+                client_sock, addr = server_sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            print(f"[net] Peer connected from {addr[0]}:{addr[1]}")
+            with clients_lock:
+                clients.add(client_sock)
+
+            threading.Thread(
+                target=socket_reader_thread,
+                args=(client_sock, incoming_queue, stop_event, remove_client),
+                daemon=True,
+            ).start()
+
+    accept_thread = threading.Thread(target=accept_loop, daemon=True)
+    accept_thread.start()
+
+    def send(payload):
+        with clients_lock:
+            snapshot = list(clients)
+
+        dead = []
+        for client_sock in snapshot:
+            if not send_json_line_socket(client_sock, payload):
+                dead.append(client_sock)
+
+        for client_sock in dead:
+            remove_client(client_sock)
+
+    def close():
+        try:
+            server_sock.close()
+        except OSError:
+            pass
+
+        with clients_lock:
+            snapshot = list(clients)
+            clients.clear()
+
+        for client_sock in snapshot:
+            try:
+                client_sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                client_sock.close()
+            except OSError:
+                pass
+
+    return {"send": send, "close": close}
+
+
+def start_join_transport(host_ip, port, incoming_queue, stop_event):
+    sock_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock_obj.settimeout(6)
+    sock_obj.connect((host_ip, port))
+
+    threading.Thread(
+        target=socket_reader_thread,
+        args=(sock_obj, incoming_queue, stop_event),
+        daemon=True,
+    ).start()
+
+    def send(payload):
+        send_json_line_socket(sock_obj, payload)
+
+    def close():
+        try:
+            sock_obj.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            sock_obj.close()
+        except OSError:
+            pass
+
+    return {"send": send, "close": close}
 
 
 def generate_room_code(length=ROOM_CODE_LENGTH):
     return "".join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(length))
 
 
-def normalize_room_code(raw):
-    # Keep only alphanumeric chars and normalize to uppercase.
-    return "".join(ch for ch in raw.upper() if ch.isalnum())
+def detect_local_ip():
+    sock_obj = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock_obj.connect(("8.8.8.8", 80))
+        return sock_obj.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        sock_obj.close()
 
 
-def prompt_room_session():
+def parse_port(raw):
+    text = raw.strip()
+    if not text:
+        return DEFAULT_LAN_PORT
+    if not text.isdigit():
+        return None
+    value = int(text)
+    if 1 <= value <= 65535:
+        return value
+    return None
+
+
+def prompt_network_session():
     print("=== P2P Piano ===")
-    print("1) Create room")
-    print("2) Join room")
+    print("1) Host (LAN)")
+    print("2) Join (LAN)")
 
     while True:
-        choice = input("Choose option [1/2]: ").strip().lower()
+        choice = input("Choose option [1/2]: ").strip()
 
-        if choice in {"1", "c", "create", "host"}:
+        if choice == "1":
             room_code = generate_room_code()
-            print(f"\nRoom created. Share this code: {room_code}\n")
-            return "host", room_code
+            local_ip = detect_local_ip()
 
-        if choice in {"2", "j", "join"}:
             while True:
-                entered = normalize_room_code(input("Enter room code: ").strip())
-                if entered:
-                    print(f"\nJoining room: {entered}\n")
-                    return "join", entered
+                port = parse_port(input(f"Port [{DEFAULT_LAN_PORT}]: "))
+                if port is not None:
+                    break
+                print("Invalid port. Use a number between 1 and 65535.")
+
+            print("\nHost session created")
+            print(f"Room code: {room_code}")
+            print(f"Share with joiners -> IP: {local_ip}  Port: {port}\n")
+            return {
+                "mode": "host",
+                "room_code": room_code,
+                "host_ip": local_ip,
+                "port": port,
+            }
+
+        if choice == "2":
+            while True:
+                entered_room = input("Enter room code (from host): ").strip().upper()
+                if entered_room:
+                    break
                 print("Room code cannot be empty.")
+
+            while True:
+                host_ip = input("Host IP: ").strip()
+                if host_ip:
+                    break
+                print("Host IP cannot be empty.")
+
+            while True:
+                port = parse_port(input(f"Host port [{DEFAULT_LAN_PORT}]: "))
+                if port is not None:
+                    break
+                print("Invalid port. Use a number between 1 and 65535.")
+
+            print(f"\nJoining room {entered_room} at {host_ip}:{port}\n")
+            return {
+                "mode": "join",
+                "room_code": entered_room,
+                "host_ip": host_ip,
+                "port": port,
+            }
 
         print("Invalid option. Type 1 to create or 2 to join.")
 
@@ -326,26 +470,24 @@ def draw_piano(screen, white_keys, black_keys, pressed_local, remote_highlights,
 
 
 def main():
-    mode, room_code = prompt_room_session()
-
-    topic_hex = hashlib.sha256(room_code.encode("utf-8")).hexdigest()
-    proc = spawn_p2p_process(topic_hex)
+    session = prompt_network_session()
+    mode = session["mode"]
+    room_code = session["room_code"]
+    port = session["port"]
 
     incoming_queue = queue.Queue()
     stop_event = threading.Event()
 
-    out_thread = threading.Thread(
-        target=stdout_reader_thread,
-        args=(proc, incoming_queue, stop_event),
-        daemon=True,
-    )
-    err_thread = threading.Thread(
-        target=stderr_reader_thread,
-        args=(proc, stop_event),
-        daemon=True,
-    )
-    out_thread.start()
-    err_thread.start()
+    try:
+        if mode == "host":
+            transport = start_host_transport(port, incoming_queue, stop_event)
+            session_label = f"HOST {session['host_ip']}:{port} | Room: {room_code}"
+        else:
+            transport = start_join_transport(session["host_ip"], port, incoming_queue, stop_event)
+            session_label = f"JOIN {session['host_ip']}:{port} | Room: {room_code}"
+    except OSError as exc:
+        print(f"Network startup failed: {exc}", file=sys.stderr)
+        return
 
     pygame.init()
     pygame.midi.init()
@@ -372,9 +514,8 @@ def main():
             audio_out = SilentAudioOutput()
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption(f"P2P Piano ({mode.upper()} - {room_code})")
+    pygame.display.set_caption(f"P2P Piano LAN ({mode.upper()} - {room_code})")
     clock = pygame.time.Clock()
-    session_label = f"Mode: {mode.upper()} | Room: {room_code}"
 
     white_keys, black_keys = build_key_layout()
 
@@ -409,14 +550,14 @@ def main():
                 if note is not None and note not in pressed_local:
                     pressed_local.add(note)
                     play_note(note)
-                    send_json_line(proc, {"type": "note_on", "note": note})
+                    transport["send"]({"type": "note_on", "note": note})
 
             elif event.type == pygame.KEYUP:
                 note = KEYBOARD_NOTE_MAP.get(event.key)
                 if note is not None and note in pressed_local:
                     pressed_local.remove(note)
                     stop_note(note)
-                    send_json_line(proc, {"type": "note_off", "note": note})
+                    transport["send"]({"type": "note_off", "note": note})
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 note = get_note_from_mouse(event.pos, white_keys, black_keys)
@@ -424,13 +565,13 @@ def main():
                     pressed_local.add(note)
                     mouse_active_note = note
                     play_note(note)
-                    send_json_line(proc, {"type": "note_on", "note": note})
+                    transport["send"]({"type": "note_on", "note": note})
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if mouse_active_note is not None and mouse_active_note in pressed_local:
                     pressed_local.remove(mouse_active_note)
                     stop_note(mouse_active_note)
-                    send_json_line(proc, {"type": "note_off", "note": mouse_active_note})
+                    transport["send"]({"type": "note_off", "note": mouse_active_note})
                 mouse_active_note = None
 
         # Consume all messages from JS process without blocking frame updates.
@@ -463,19 +604,7 @@ def main():
 
     # Graceful shutdown
     stop_event.set()
-
-    try:
-        if proc.stdin:
-            proc.stdin.close()
-    except OSError:
-        pass
-
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    transport["close"]()
 
     audio_out.close()
     pygame.midi.quit()
