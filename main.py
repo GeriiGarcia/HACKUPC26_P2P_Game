@@ -2,6 +2,8 @@ import hashlib
 import json
 import math
 import queue
+import secrets
+import string
 import subprocess
 import sys
 import threading
@@ -21,12 +23,15 @@ BLACK_KEY_W = 60
 BLACK_KEY_H = 140
 
 HIGHLIGHT_MS = 300
+ROOM_CODE_LENGTH = 6
 
 NOTE_MIN = 60  # C4
 NOTE_MAX = 77  # F5 (C4 + 1.5 octaves)
 
 WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
 BLACK_PCS = {1, 3, 6, 8, 10}
+
+ROOM_CODE_ALPHABET = string.ascii_uppercase + string.digits
 
 
 KEYBOARD_NOTE_MAP = {
@@ -242,7 +247,40 @@ def send_json_line(proc, payload):
         pass
 
 
-def draw_piano(screen, white_keys, black_keys, pressed_local, remote_highlights):
+def generate_room_code(length=ROOM_CODE_LENGTH):
+    return "".join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(length))
+
+
+def normalize_room_code(raw):
+    # Keep only alphanumeric chars and normalize to uppercase.
+    return "".join(ch for ch in raw.upper() if ch.isalnum())
+
+
+def prompt_room_session():
+    print("=== P2P Piano ===")
+    print("1) Create room")
+    print("2) Join room")
+
+    while True:
+        choice = input("Choose option [1/2]: ").strip().lower()
+
+        if choice in {"1", "c", "create", "host"}:
+            room_code = generate_room_code()
+            print(f"\nRoom created. Share this code: {room_code}\n")
+            return "host", room_code
+
+        if choice in {"2", "j", "join"}:
+            while True:
+                entered = normalize_room_code(input("Enter room code: ").strip())
+                if entered:
+                    print(f"\nJoining room: {entered}\n")
+                    return "join", entered
+                print("Room code cannot be empty.")
+
+        print("Invalid option. Type 1 to create or 2 to join.")
+
+
+def draw_piano(screen, white_keys, black_keys, pressed_local, remote_highlights, session_label):
     screen.fill((24, 24, 28))
 
     now_ms = pygame.time.get_ticks()
@@ -283,11 +321,12 @@ def draw_piano(screen, white_keys, black_keys, pressed_local, remote_highlights)
     )
     screen.blit(tip, (80, 20))
 
+    status = font.render(session_label, True, (180, 210, 180))
+    screen.blit(status, (80, 44))
+
 
 def main():
-    room_code = input("Enter room code: ").strip()
-    if not room_code:
-        room_code = "default-room"
+    mode, room_code = prompt_room_session()
 
     topic_hex = hashlib.sha256(room_code.encode("utf-8")).hexdigest()
     proc = spawn_p2p_process(topic_hex)
@@ -333,8 +372,9 @@ def main():
             audio_out = SilentAudioOutput()
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("P2P Piano (C4-F5)")
+    pygame.display.set_caption(f"P2P Piano ({mode.upper()} - {room_code})")
     clock = pygame.time.Clock()
+    session_label = f"Mode: {mode.upper()} | Room: {room_code}"
 
     white_keys, black_keys = build_key_layout()
 
@@ -417,7 +457,7 @@ def main():
         for n in expired:
             remote_highlights.pop(n, None)
 
-        draw_piano(screen, white_keys, black_keys, pressed_local, remote_highlights)
+        draw_piano(screen, white_keys, black_keys, pressed_local, remote_highlights, session_label)
         pygame.display.flip()
         clock.tick(FPS)
 
