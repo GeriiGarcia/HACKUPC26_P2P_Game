@@ -46,7 +46,9 @@ class Board:
                 if self.grid[y][x] == 2:
                     pygame.draw.rect(screen, (200, 200, 200), rect) # Agua
                 elif self.grid[y][x] == 3:
-                    pygame.draw.rect(screen, (255, 50, 50), rect) # Tocado
+                    pygame.draw.rect(screen, (255, 165, 0), rect) # Tocado por 1 (Naranja)
+                elif self.grid[y][x] >= 4:
+                    pygame.draw.rect(screen, (255, 50, 50), rect) # Tocado por 2+ (Rojo)
                 else:
                     pygame.draw.rect(screen, SEA_COLOR, rect)
                     
@@ -158,8 +160,9 @@ class AttackBoard:
         self.grid = [[UNEXPLORED for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
         self.selected_coord = None # Tupla (x, y)
         
-    def draw(self, screen, font):
-        lbl = font.render(f"Rival: {self.target_peer_id}", True, (255,255,255))
+    def draw(self, screen, font, is_their_turn=False):
+        color = (255, 255, 0) if is_their_turn else (255, 255, 255)
+        lbl = font.render(f"Rival: {self.target_peer_id}", True, color)
         screen.blit(lbl, (self.x_offset, self.y_offset - 20))
         
         for y in range(BOARD_SIZE):

@@ -43,9 +43,10 @@ def copy_to_clipboard(text):
             return False
 
 def main():
+    global WIDTH, HEIGHT
     pygame.init()
         
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
     pygame.display.set_caption("Hundir la Flota P2P")
     clock = pygame.time.Clock()
 
@@ -105,6 +106,25 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.VIDEORESIZE:
+                WIDTH, HEIGHT = event.size
+                screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                
+                # Actualizar elementos estáticos de UI para que no se queden fuera de pantalla
+                btn_create.rect.centerx, btn_create.rect.y = WIDTH//2, HEIGHT//2 - 50
+                btn_join.rect.centerx, btn_join.rect.y = WIDTH//2, HEIGHT//2 + 20
+                input_create_name.rect.centerx, input_create_name.rect.y = WIDTH//2, HEIGHT//2 - 120
+                input_create_room.rect.centerx, input_create_room.rect.y = WIDTH//2, HEIGHT//2 - 30
+                btn_create_confirm.rect.centerx, btn_create_confirm.rect.y = WIDTH//2 + 80, HEIGHT//2 + 40
+                btn_create_back.rect.centerx, btn_create_back.rect.y = WIDTH//2 - 80, HEIGHT//2 + 40
+                input_join_name.rect.centerx, input_join_name.rect.y = WIDTH//2, HEIGHT//2 - 120
+                input_join_room.rect.centerx, input_join_room.rect.y = WIDTH//2, HEIGHT//2 - 30
+                btn_join_confirm.rect.centerx, btn_join_confirm.rect.y = WIDTH//2 + 80, HEIGHT//2 + 40
+                btn_join_back.rect.centerx, btn_join_back.rect.y = WIDTH//2 - 80, HEIGHT//2 + 40
+                btn_copy_hash.rect.centerx, btn_copy_hash.rect.y = WIDTH//2, HEIGHT//2 + 20
+                btn_goto_lobby.rect.centerx, btn_goto_lobby.rect.y = WIDTH//2, HEIGHT//2 + 80
+                btn_start_lobby.rect.centerx, btn_start_lobby.rect.y = WIDTH//2, HEIGHT - 100
+                btn_fire.rect.centerx, btn_fire.rect.y = WIDTH//2, HEIGHT - 60
             
             if current_state == STATE_MENU:
                 if btn_create.handle_event(event):
@@ -220,11 +240,13 @@ def main():
                         x = letters.index(coord[0])
                         y = int(coord[1:]) - 1
                         
-                        hit = (my_board.grid[y][x] == 1 or my_board.grid[y][x] == 3)
-                        # Marcar en nuestro tablero
-                        if hit:
+                        hit = (my_board.grid[y][x] == 1 or my_board.grid[y][x] >= 3)
+                        # Marcar en nuestro tablero sumando impactos
+                        if my_board.grid[y][x] == 1:
                             my_board.grid[y][x] = 3
-                        else:
+                        elif my_board.grid[y][x] >= 3:
+                            my_board.grid[y][x] += 1
+                        elif my_board.grid[y][x] == 0:
                             my_board.grid[y][x] = 2
                             
                         print(f"[JUEGO] Nos han disparado en {coord}. Tocado: {hit}")
@@ -323,6 +345,9 @@ def main():
             screen.fill((20, 20, 40))
             if not battle_phase:
                 if my_board:
+                    # Centrar el tablero
+                    my_board.x_offset = WIDTH//2 - (my_board.cell_size * 12)//2
+                    my_board.y_offset = HEIGHT//2 - (my_board.cell_size * 12)//2
                     my_board.draw(screen, font_small)
                     
                     if my_board.is_ready:
@@ -344,18 +369,28 @@ def main():
                             my_board.y_offset = HEIGHT - (12*15) - 60
                             
                             # Crear tableros de ataque
-                            offset_x = 50
                             for p in net_manager.peers.keys():
-                                attack_boards.append(AttackBoard(p, offset_x, 100))
-                                offset_x += 12 * 25 + 50
+                                attack_boards.append(AttackBoard(p, 0, 100)) # El offset x se calculará dinámicamente
+
             else:
                 # Dibujar fase de batalla
-                # 1. Tableros de ataque
-                for ab in attack_boards:
-                    ab.draw(screen, font_small)
+                turn_player = all_players_sorted[current_turn_index]
+                is_my_turn = (turn_player == net_manager.peer_id)
                 
-                # 2. Pequeño tablero propio (defensa)
-                lbl_defense = font_small.render("Tu tablero de defensa:", True, WHITE)
+                # 1. Tableros de ataque (centrados arriba)
+                total_attack_width = len(attack_boards) * (12 * 25) + max(0, len(attack_boards) - 1) * 50
+                start_x = WIDTH//2 - total_attack_width//2
+                
+                for i, ab in enumerate(attack_boards):
+                    ab.x_offset = start_x + i * (12 * 25 + 50)
+                    ab.draw(screen, font_small, is_their_turn=(ab.target_peer_id == turn_player))
+                
+                # 2. Pequeño tablero propio (defensa) pegado hacia abajo
+                my_board.x_offset = WIDTH//2 - (12*15)//2
+                my_board.y_offset = HEIGHT - (12*15) - 20
+                
+                my_lbl_color = (255, 255, 0) if is_my_turn else WHITE
+                lbl_defense = font_small.render("Tu tablero de defensa:", True, my_lbl_color)
                 screen.blit(lbl_defense, (my_board.x_offset, my_board.y_offset - 20))
                 my_board.draw(screen, font_small)
                 
