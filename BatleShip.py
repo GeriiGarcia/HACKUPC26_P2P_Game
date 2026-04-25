@@ -3,6 +3,8 @@ import random
 import string
 import hashlib
 
+# (removed debug logging) click mapping will mirror placement board behavior
+
 # Colores del juego
 SEA_COLOR = (20, 100, 200)
 GRID_COLOR = (50, 150, 255)
@@ -312,10 +314,20 @@ class AttackBoard:
             if (self.x_offset <= mouse_x < self.x_offset + BOARD_SIZE * self.cell_size and 
                 self.y_offset <= mouse_y < self.y_offset + BOARD_SIZE * self.cell_size):
                 
-                grid_x = (mouse_x - self.x_offset) // self.cell_size
-                grid_y = (mouse_y - self.y_offset) // self.cell_size
-                
-                if self.grid[grid_y][grid_x] == UNEXPLORED or self.grid[grid_y][grid_x] == SELECTED:
+                # Compute grid indices robustly and clamp to valid range
+                rel_x = mouse_x - self.x_offset
+                rel_y = mouse_y - self.y_offset
+                # Use floor mapping like placement: top-left of cell selects that cell
+                grid_x = int(rel_x // self.cell_size)
+                grid_y = int(rel_y // self.cell_size)
+
+                if grid_x < 0: grid_x = 0
+                if grid_y < 0: grid_y = 0
+                if grid_x >= BOARD_SIZE: grid_x = BOARD_SIZE - 1
+                if grid_y >= BOARD_SIZE: grid_y = BOARD_SIZE - 1
+
+                if self.grid[grid_y][grid_x] in (UNEXPLORED, SELECTED):
+                    # Use same mapping as placement: floor division (top-left mapping)
                     self.clear_selection()
                     self.selected_coord = (grid_x, grid_y)
                     self.grid[grid_y][grid_x] = SELECTED
@@ -365,3 +377,306 @@ class AttackBoard:
                 self.grid[y][x] = SUNK
                 if self.selected_coord == (x, y):
                     self.selected_coord = None
+
+
+class BattleshipGame:
+    """High-level Battleship game flow manager.
+    Manages placement, attack boards, turns and network message handling.
+    """
+    def __init__(self, net_manager=None):
+        self.net = net_manager
+        self.my_board = None
+        self.player_commits = {}
+        self.has_committed_board = False
+        self.battle_phase = False
+        self.attack_boards = []
+        self.all_players_sorted = []
+        self.current_turn_index = 0
+        self.eliminated_players = set()
+        self.elimination_order = []
+        self.game_over = False
+        self.final_ranking = []
+        self.winner_peer_id = None
+
+    def start_placement(self, width, height, cell_size=30):
+        # create a centered board; main program may call update_ui_layout to reposition
+        board_px = BOARD_SIZE * cell_size
+        x = width//2 - board_px//2
+        y = height//2 - board_px//2
+        self.my_board = Board(x, y, cell_size)
+        self.player_commits.clear()
+        self.has_committed_board = False
+        self.battle_phase = False
+        self.attack_boards.clear()
+        self.eliminated_players.clear()
+        self.elimination_order.clear()
+        self.all_players_sorted.clear()
+        self.current_turn_index = 0
+        self.game_over = False
+        self.final_ranking.clear()
+        self.winner_peer_id = None
+
+    def _first_alive_index(self):
+        for i, p in enumerate(self.all_players_sorted):
+            if p not in self.eliminated_players:
+                return i
+        return None
+
+    def ensure_current_turn_is_alive(self):
+        if not self.all_players_sorted:
+            return
+        if not (0 <= self.current_turn_index < len(self.all_players_sorted)):
+            idx = self._first_alive_index()
+            if idx is not None:
+                self.current_turn_index = idx
+            return
+        current_player = self.all_players_sorted[self.current_turn_index]
+        if current_player not in self.eliminated_players:
+            return
+        n = len(self.all_players_sorted)
+        i = self.current_turn_index
+        for _ in range(n):
+            i = (i + 1) % n
+            if self.all_players_sorted[i] not in self.eliminated_players:
+                self.current_turn_index = i
+                return
+
+    def advance_turn_to_next_alive(self):
+        if not self.all_players_sorted:
+            return
+        if not (0 <= self.current_turn_index < len(self.all_players_sorted)):
+            idx = self._first_alive_index()
+            if idx is not None:
+                self.current_turn_index = idx
+            return
+        n = len(self.all_players_sorted)
+        i = self.current_turn_index
+        for _ in range(n):
+            i = (i + 1) % n
+            if self.all_players_sorted[i] not in self.eliminated_players:
+                self.current_turn_index = i
+                return
+
+    def refresh_attack_boards_elimination_state(self):
+        for ab in self.attack_boards:
+            ab.is_eliminated = (ab.target_peer_id in self.eliminated_players)
+            if ab.is_eliminated:
+                ab.clear_selection()
+
+    def announce_elimination(self, peer_id, source="local"):
+        if peer_id in self.eliminated_players:
+            return
+        self.eliminated_players.add(peer_id)
+        if peer_id not in self.elimination_order:
+            self.elimination_order.append(peer_id)
+        self.refresh_attack_boards_elimination_state()
+        if self.net and peer_id == getattr(self.net, 'peer_id', None):
+            for ab in self.attack_boards:
+                ab.clear_selection()
+        # check winners
+        alive = [p for p in (sorted(list(self.net.peers.keys()) + [self.net.peer_id]) if self.net else []) if p not in self.eliminated_players]
+        if len(alive) <= 1:
+            self.game_over = True
+            # build final ranking
+            ordered = [p for p in self.elimination_order if p not in alive]
+            self.final_ranking = list(reversed(alive)) + list(reversed(ordered))
+            self.winner_peer_id = self.final_ranking[0] if self.final_ranking else None
+        else:
+            self.ensure_current_turn_is_alive()
+
+        if source == "local" and self.net:
+            try:
+                self.net.send_event("PLAYER_ELIMINATED", eliminated_peer=peer_id)
+                if self.game_over:
+                    self.net.send_event("GAME_OVER", winner_peer=self.winner_peer_id, ranking=self.final_ranking)
+            except Exception:
+                pass
+
+    def handle_event(self, event):
+        # placement
+        if self.my_board and not self.battle_phase:
+            self.my_board.handle_event(event)
+            if self.my_board.is_ready and not self.has_committed_board and self.net:
+                board_hash = self.my_board.get_board_hash()
+                try:
+                    self.net.send_event("COMMIT_BOARD", board_hash=board_hash)
+                except Exception:
+                    pass
+                self.has_committed_board = True
+        elif self.battle_phase:
+            if self.game_over:
+                return
+            self.ensure_current_turn_is_alive()
+            turn_owner = self.all_players_sorted[self.current_turn_index] if self.all_players_sorted else None
+            is_my_turn = (not self.game_over and turn_owner == getattr(self.net, 'peer_id', None) and getattr(self.net, 'peer_id', None) not in self.eliminated_players)
+            for ab in self.attack_boards:
+                ab.handle_event(event, is_my_turn)
+            # returning whether a FIRE_MULTI needs to be sent is handled by caller via checking attack_boards selection
+
+    def on_network_message(self, msg):
+        action = msg.get('action')
+        if action == 'START_GAME':
+            # Host started the match
+            self.start_placement(msg.get('width', 800), msg.get('height', 600))
+            return
+        if action == 'COMMIT_BOARD':
+            peer_id = msg.get('peerId')
+            b_hash = msg.get('board_hash')
+            self.player_commits[peer_id] = b_hash
+            return
+        if action == 'FIRE_MULTI':
+            targets = msg.get('targets') or []
+            sender = msg.get('peerId')
+            if self.battle_phase and not self.game_over and sender and sender not in self.eliminated_players:
+                if sender in self.all_players_sorted:
+                    self.current_turn_index = self.all_players_sorted.index(sender)
+                self.advance_turn_to_next_alive()
+            for t in targets:
+                if t.get('target_peer') == getattr(self.net, 'peer_id', None):
+                    coord = t.get('coord')
+                    try:
+                        letters = "ABCDEFGHIJKL"
+                        x = letters.index(coord[0])
+                        y = int(coord[1:]) - 1
+                    except Exception:
+                        continue
+                    shot_result = self.my_board.receive_shot(x, y)
+                    hit = shot_result.get('hit', False)
+                    sunk = shot_result.get('sunk', False)
+                    sunk_cells = shot_result.get('sunk_cells', [])
+                    eliminated_now = shot_result.get('eliminated', False)
+                    # send result back
+                    if self.net:
+                        try:
+                            letters = "ABCDEFGHIJKL"
+                            sunk_cells_coord = [f"{letters[cx]}{cy+1}" for (cx, cy) in sunk_cells]
+                            self.net.send_event('RESULT', target_peer=sender, coord=coord, hit=hit, sunk=sunk, sunk_cells=sunk_cells_coord, eliminated=eliminated_now, eliminated_peer=(self.net.peer_id if eliminated_now else None))
+                        except Exception:
+                            pass
+                    if eliminated_now:
+                        self.announce_elimination(getattr(self.net, 'peer_id', None), source='local')
+            return
+        if action == 'RESULT':
+            target_peer = msg.get('target_peer')
+            coord = msg.get('coord')
+            hit = msg.get('hit')
+            sender = msg.get('peerId')
+            sunk = msg.get('sunk', False)
+            sunk_cells = msg.get('sunk_cells') or []
+            eliminated_flag = msg.get('eliminated', False)
+            eliminated_peer = msg.get('eliminated_peer') or sender
+            for ab in self.attack_boards:
+                if ab.target_peer_id == sender:
+                    if coord:
+                        ab.apply_result(coord, hit, sunk=sunk)
+                    if sunk and sunk_cells:
+                        ab.apply_sunk_cells(sunk_cells)
+            if target_peer == getattr(self.net, 'peer_id', None):
+                pass
+            if eliminated_flag and eliminated_peer:
+                self.announce_elimination(eliminated_peer, source='remote')
+            return
+        if action == 'PLAYER_ELIMINATED':
+            eliminated_peer = msg.get('eliminated_peer') or msg.get('peerId')
+            if eliminated_peer:
+                self.announce_elimination(eliminated_peer, source='remote')
+            return
+        if action == 'GAME_OVER':
+            winner_peer = msg.get('winner_peer')
+            ranking = msg.get('ranking') or []
+            if ranking:
+                self.game_over = True
+                self.final_ranking = ranking
+                self.winner_peer_id = winner_peer or ranking[0]
+            elif winner_peer:
+                self.game_over = True
+                self.winner_peer_id = winner_peer
+                # best effort
+                self.final_ranking = []
+            return
+
+    def start_battle_if_ready(self):
+        # called to check if all players committed and transition to battle
+        if not self.my_board or not self.my_board.is_ready:
+            return False
+        if not self.net:
+            return False
+        total_players = 1 + len(self.net.peers)
+        ready_count = len(self.player_commits) + (1 if self.has_committed_board else 0)
+        if ready_count >= total_players:
+            # all ready -> start battle
+            self.battle_phase = True
+            self.all_players_sorted = sorted(list(self.net.peers.keys()) + [self.net.peer_id])
+            self.current_turn_index = 0
+            self.attack_boards = []
+            # create attack boards (positions will be updated by caller)
+            for p in self.net.peers.keys():
+                self.attack_boards.append(AttackBoard(p, 0, 100))
+            return True
+        return False
+
+    def draw(self, screen, font_small, font_normal, font_title, width, height):
+        # placement
+        if not self.battle_phase:
+            if self.my_board:
+                self.my_board.draw(screen, font_small)
+                if self.my_board.is_ready:
+                    ready_count = len(self.player_commits) + (1 if self.has_committed_board else 0)
+                    total_players = len(self.net.peers) + 1 if self.net else 1
+                    status_text = f"Jugadores listos: {ready_count} / {total_players}"
+                    status_lbl = font_normal.render(status_text, True, (200,200,200))
+                    screen.blit(status_lbl, (width//2 - status_lbl.get_width()//2, height - 50))
+        else:
+            # battle drawing
+            layout = None
+            # basic layout computation (caller may supply compute_battle_layout)
+            self.ensure_current_turn_is_alive()
+            turn_player = self.all_players_sorted[self.current_turn_index] if self.all_players_sorted else None
+            i_am_eliminated = (getattr(self.net, 'peer_id', None) in self.eliminated_players)
+            is_my_turn = (not self.game_over and not i_am_eliminated and turn_player == getattr(self.net, 'peer_id', None))
+            if self.game_over:
+                turn_text = f"🏆 Ganador: {self.winner_peer_id}" if self.winner_peer_id else "Partida terminada"
+                color = (255,215,80)
+            elif i_am_eliminated:
+                turn_text = "Has sido eliminado"
+                color = (255,120,120)
+            else:
+                turn_text = "¡Es tu turno!" if is_my_turn else f"Turno de {turn_player}..."
+                color = (50,255,50) if is_my_turn else (200,200,200)
+            turn_lbl = font_title.render(turn_text, True, color)
+            screen.blit(turn_lbl, (width//2 - turn_lbl.get_width()//2, 40))
+            # attack boards
+            # Use offsets provided by caller (main layout); only apply defaults when offsets are unset (0)
+            y = 100
+            for ab in self.attack_boards:
+                if not getattr(ab, 'x_offset', 0):
+                    ab.x_offset = max(20, width//2 - (BOARD_SIZE * ab.cell_size)//2)
+                if not getattr(ab, 'y_offset', 0):
+                    ab.y_offset = y
+                ab.draw(screen, font_small, is_their_turn=(ab.target_peer_id == turn_player))
+                y += BOARD_SIZE*ab.cell_size + 12
+            # defense board
+            if self.my_board:
+                defense_label_y = self.my_board.y_offset - font_small.get_height() - 6
+                my_lbl_color = (255,120,120) if i_am_eliminated else ((255,255,0) if is_my_turn else (255,255,255))
+                defense_label_txt = "Tu tablero de defensa" + (" (ELIMINADO)" if i_am_eliminated else ":")
+                lbl_defense = font_small.render(defense_label_txt, True, my_lbl_color)
+                screen.blit(lbl_defense, (self.my_board.x_offset, defense_label_y))
+                self.my_board.draw(screen, font_small, show_status_text=False)
+            # game over overlay
+            if self.game_over:
+                overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+                overlay.fill((10,10,20,170))
+                screen.blit(overlay, (0,0))
+                panel_w = min(560, max(360, width - 120))
+                panel_h = min(420, max(260, height - 120))
+                panel_x = (width - panel_w)//2
+                panel_y = (height - panel_h)//2
+                panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+                pygame.draw.rect(screen, (30,35,55), panel_rect, border_radius=10)
+                pygame.draw.rect(screen, (230,230,230), panel_rect, 2, border_radius=10)
+                title = font_title.render("Fin de la partida", True, (255,255,255))
+                screen.blit(title, (panel_x + panel_w//2 - title.get_width()//2, panel_y + 18))
+                winner_text = f"Ganador: {self.winner_peer_id}" if self.winner_peer_id else "Ganador: (desconocido)"
+                winner_lbl = font_normal.render(winner_text, True, (255,215,80))
+                screen.blit(winner_lbl, (panel_x + panel_w//2 - winner_lbl.get_width()//2, panel_y + 80))
