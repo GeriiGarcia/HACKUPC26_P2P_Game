@@ -99,6 +99,8 @@ def main():
                     try:
                         net = NetworkManager(room_hash)
                         net.on_peer_connected = on_peer_connected
+                        # route incoming network messages into our queue
+                        net.on_message_received = lambda m: msg_q.put(('net_msg', m))
                         net.start()
                         room_hash_display = room_hash
                         peers = list(net.peers.keys())
@@ -118,6 +120,11 @@ def main():
                     peers = []
                     current_state = STATE_MENU
                 if is_host and btn_start.handle_event(event) and net:
+                    # broadcast start event, then run locally
+                    try:
+                        net.send_event('START_GAME')
+                    except Exception:
+                        pass
                     # instantiate the game and run it (blocking)
                     game = KartGame(net_manager=net)
                     try:
@@ -143,6 +150,23 @@ def main():
                 if typ == 'peer_connected':
                     if val not in peers:
                         peers.append(val)
+                elif typ == 'net_msg':
+                    msg = val
+                    action = msg.get('action')
+                    if action == 'START_GAME':
+                        # start local game when host signals
+                        if net:
+                            game = KartGame(net_manager=net)
+                            try:
+                                game.run()
+                            finally:
+                                try:
+                                    net.stop()
+                                except Exception:
+                                    pass
+                                net = None
+                                peers = []
+                                current_state = STATE_MENU
         except Exception:
             pass
 

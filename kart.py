@@ -91,7 +91,8 @@ class KartGame:
         self.checkpoint_counter = 0
         self.last_tile = 0
 
-        # Opponents state: peer_id -> {x,y,direction,speed,last_seen,eliminated}
+        # Opponents state: peer_id -> dict with received target and rendered positions
+        # Each entry will contain: x_target, y_target, direction_target, speed, render_x, render_y, last_seen, eliminated
         self.opponents = {}
 
         # Network callback
@@ -103,14 +104,32 @@ class KartGame:
                     if not peer or peer == self.net.peer_id:
                         return
                     if action == 'STATE':
-                        self.opponents[peer] = {
-                            'x': float(msg.get('x', 0.0)),
-                            'y': float(msg.get('y', 0.0)),
-                            'direction': float(msg.get('direction', 0.0)),
-                            'speed': float(msg.get('speed', 0.0)),
-                            'last_seen': time.time(),
-                            'eliminated': False
-                        }
+                        tx = float(msg.get('x', 0.0))
+                        ty = float(msg.get('y', 0.0))
+                        td = float(msg.get('direction', 0.0))
+                        spd = float(msg.get('speed', 0.0))
+                        now_t = time.time()
+                        p = self.opponents.get(peer)
+                        if p is None:
+                            # first time, set rendered positions to target immediately
+                            self.opponents[peer] = {
+                                'x_target': tx,
+                                'y_target': ty,
+                                'direction_target': td,
+                                'speed': spd,
+                                'render_x': tx,
+                                'render_y': ty,
+                                'render_direction': td,
+                                'last_seen': now_t,
+                                'eliminated': False
+                            }
+                        else:
+                            p['x_target'] = tx
+                            p['y_target'] = ty
+                            p['direction_target'] = td
+                            p['speed'] = spd
+                            p['last_seen'] = now_t
+                            # keep p['render_x']/render_y unchanged; smoothing will move them towards target
                     elif action == 'PLAYER_ELIMINATED':
                         if peer in self.opponents:
                             self.opponents[peer]['eliminated'] = True
@@ -183,6 +202,24 @@ class KartGame:
             if now - self.opponents[p].get('last_seen', 0) > 10:
                 del self.opponents[p]
 
+        # Smooth remote players toward their last received target (no extrapolation)
+        # Use exponential smoothing based on frame dt set by run()
+        dt = getattr(self, '_frame_dt', 1.0 / FPS)
+        # smoothing rate: larger -> faster converge
+        rate = 8.0
+        alpha = 1.0 - math.exp(-rate * dt)
+        for peer_id, p in self.opponents.items():
+            # Only update render positions if targets exist
+            if 'x_target' in p and 'render_x' in p:
+                p['render_x'] += (p['x_target'] - p['render_x']) * alpha
+                p['render_y'] += (p['y_target'] - p['render_y']) * alpha
+                # smooth direction (wrap-aware)
+                rd = p.get('render_direction', p.get('direction_target', 0.0))
+                td = p.get('direction_target', rd)
+                diff = (td - rd + 180) % 360 - 180
+                rd += diff * alpha
+                p['render_direction'] = rd % 360
+
     def draw(self):
         # Clear
         self.screen.fill((0, 0, 0))
@@ -213,9 +250,12 @@ class KartGame:
 
         # Draw opponents
         for peer_id, st in self.opponents.items():
-            color = (100, 100, 100) if st.get('eliminated') else (30, 120, 200)
-            screen_x = self.width//2 + int((st['x'] - self.x) * tile_size)
-            screen_y = self.height//2 + int((st['y'] - self.y) * tile_size)
+            # deterministic color per peer
+            color = (100, 100, 100) if st.get('eliminated') else self._color_for_peer(peer_id)
+            rx = st.get('render_x', st.get('x_target', 0.0))
+            ry = st.get('render_y', st.get('y_target', 0.0))
+            screen_x = self.width//2 + int((rx - self.x) * tile_size)
+            screen_y = self.height//2 + int((ry - self.y) * tile_size)
             pygame.draw.circle(self.screen, color, (screen_x, screen_y), 24)
             font = pygame.font.SysFont(None, 20)
             text = font.render(peer_id, True, (255, 255, 255))
@@ -226,9 +266,21 @@ class KartGame:
 
         pygame.display.flip()
 
+    def _color_for_peer(self, peer_id):
+        # Lightweight deterministic color from peer id
+        s = sum(ord(c) for c in str(peer_id))
+        r = 80 + (s * 97) % 160
+        g = 60 + (s * 193) % 160
+        b = 80 + (s * 71) % 160
+        return (r, g, b)
+
     def run(self):
         self.running = True
         while self.running:
+            # frame delta in seconds
+            dt = self.clock.tick(FPS) / 1000.0
+            self._frame_dt = dt
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -238,8 +290,6 @@ class KartGame:
             # send state update
             self.send_state()
             self.draw()
-
-            self.clock.tick(FPS)
 
 
 def main():
