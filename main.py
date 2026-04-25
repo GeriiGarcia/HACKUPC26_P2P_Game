@@ -5,7 +5,7 @@ import subprocess
 import queue
 from ui import Button, TextInput
 from network import NetworkManager
-from game import Board
+from game import Board, AttackBoard
 
 # Configuración básica
 WIDTH, HEIGHT = 800, 600
@@ -63,6 +63,13 @@ def main():
     my_board = None
     has_committed_board = False
     player_commits = {} # Aquí guardaremos los board_hash de los rivales
+    
+    # Variables de Batalla
+    battle_phase = False
+    attack_boards = []
+    btn_fire = Button(WIDTH//2 - 70, HEIGHT - 60, 140, 40, "¡Fuego!", font_normal, bg_color=(200, 50, 50), hover_color=(255, 100, 100))
+    all_players_sorted = []
+    current_turn_index = 0
 
     def on_message_received(msg):
         msg_queue.put(msg)
@@ -152,15 +159,31 @@ def main():
                     current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
-                if my_board:
+                if my_board and not battle_phase:
                     my_board.handle_event(event)
                     
-                    # Si acabamos de colocar todos los barcos, hacemos COMMIT
                     if my_board.is_ready and not has_committed_board:
                         board_hash = my_board.get_board_hash()
                         print(f"Enviando COMMIT_BOARD: {board_hash}")
                         net_manager.send_event("COMMIT_BOARD", board_hash=board_hash)
                         has_committed_board = True
+                        
+                elif battle_phase:
+                    is_my_turn = (all_players_sorted[current_turn_index] == net_manager.peer_id)
+                    for ab in attack_boards:
+                        ab.handle_event(event, is_my_turn)
+                        
+                    if is_my_turn and btn_fire.handle_event(event):
+                        targets = []
+                        for ab in attack_boards:
+                            if ab.selected_coord:
+                                targets.append({"target_peer": ab.target_peer_id, "coord": ab.get_selected_coord_str()})
+                                
+                        # Solo permitimos disparar si ha seleccionado en todos los rivales
+                        if len(targets) == len(attack_boards):
+                            net_manager.send_event("FIRE_MULTI", targets=targets)
+                            current_turn_index = (current_turn_index + 1) % len(all_players_sorted)
+                            print("[JUEGO] Disparos enviados.")
 
         # Procesar mensajes de red entrantes
         while not msg_queue.empty():
@@ -175,6 +198,36 @@ def main():
                 b_hash = msg.get("board_hash")
                 player_commits[peer_id] = b_hash
                 print(f"[JUEGO] El jugador {peer_id} ha fijado su flota.")
+                
+            elif msg.get("action") == "FIRE_MULTI":
+                targets = msg.get("targets")
+                sender = msg.get("peerId")
+                
+                if battle_phase:
+                    current_turn_index = (current_turn_index + 1) % len(all_players_sorted)
+                
+                for t in targets:
+                    if t["target_peer"] == net_manager.peer_id:
+                        coord = t["coord"]
+                        letters = "ABCDEFGHIJKL"
+                        x = letters.index(coord[0])
+                        y = int(coord[1:]) - 1
+                        
+                        hit = (my_board.grid[y][x] == 1)
+                        print(f"[JUEGO] Nos han disparado en {coord}. Tocado: {hit}")
+                        net_manager.send_event("RESULT", target_peer=sender, coord=coord, hit=hit)
+                        
+            elif msg.get("action") == "RESULT":
+                target_peer = msg.get("target_peer")
+                coord = msg.get("coord")
+                hit = msg.get("hit")
+                sender = msg.get("peerId")
+                
+                if target_peer == net_manager.peer_id:
+                    for ab in attack_boards:
+                        if ab.target_peer_id == sender:
+                            ab.apply_result(coord, hit)
+                            print(f"[JUEGO] Resultado de ataque a {sender} en {coord}: {'Tocado' if hit else 'Agua'}")
 
         # Lógica de dibujado
         if current_state == STATE_MENU:
@@ -247,17 +300,49 @@ def main():
 
         elif current_state == STATE_GAME:
             screen.fill((20, 20, 40))
-            if my_board:
-                my_board.draw(screen, font_small)
-                
-                # Si nosotros ya hemos acabado, mostramos estado de los rivales
-                if my_board.is_ready:
-                    ready_count = len(player_commits) + 1 # +1 por nosotros
-                    total_players = len(net_manager.peers) + 1
+            if not battle_phase:
+                if my_board:
+                    my_board.draw(screen, font_small)
                     
-                    status_text = f"Jugadores listos: {ready_count} / {total_players}"
-                    status_lbl = font_normal.render(status_text, True, (200, 200, 200))
-                    screen.blit(status_lbl, (WIDTH//2 - status_lbl.get_width()//2, HEIGHT - 50))
+                    if my_board.is_ready:
+                        ready_count = len(player_commits) + 1 # +1 por nosotros
+                        total_players = len(net_manager.peers) + 1
+                        
+                        status_text = f"Jugadores listos: {ready_count} / {total_players}"
+                        status_lbl = font_normal.render(status_text, True, (200, 200, 200))
+                        screen.blit(status_lbl, (WIDTH//2 - status_lbl.get_width()//2, HEIGHT - 50))
+                        
+                        if ready_count == total_players:
+                            battle_phase = True
+                            all_players_sorted = sorted(list(net_manager.peers.keys()) + [net_manager.peer_id])
+                            current_turn_index = 0
+                            
+                            # Crear tableros de ataque
+                            offset_x = 50
+                            for p in net_manager.peers.keys():
+                                attack_boards.append(AttackBoard(p, offset_x, 100))
+                                offset_x += 12 * 25 + 50
+            else:
+                # Dibujar fase de batalla
+                # 1. Tableros de ataque
+                for ab in attack_boards:
+                    ab.draw(screen, font_small)
+                
+                # 2. Pequeño tablero propio (defensa)
+                # Re-escalar o dibujarlo más pequeño si quisiéramos, por ahora lo dejamos oculto 
+                # o lo podríamos dibujar abajo en pequeño.
+                
+                # 3. Estado de Turno
+                is_my_turn = (all_players_sorted[current_turn_index] == net_manager.peer_id)
+                turn_player = all_players_sorted[current_turn_index]
+                
+                turn_text = "¡Es tu turno!" if is_my_turn else f"Turno de {turn_player}..."
+                color = (50, 255, 50) if is_my_turn else (200, 200, 200)
+                turn_lbl = font_title.render(turn_text, True, color)
+                screen.blit(turn_lbl, (WIDTH//2 - turn_lbl.get_width()//2, 20))
+                
+                if is_my_turn:
+                    btn_fire.draw(screen)
             
         pygame.display.flip()
         clock.tick(FPS)

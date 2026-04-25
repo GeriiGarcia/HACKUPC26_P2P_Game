@@ -134,3 +134,71 @@ class Board:
         grid_str = "".join(str(cell) for row in self.grid for cell in row)
         data_to_hash = grid_str + self.salt
         return hashlib.sha256(data_to_hash.encode('utf-8')).hexdigest()
+
+# Estados para el tablero de ataque
+UNEXPLORED = 0
+SELECTED = 1
+WATER = 2
+HIT = 3
+
+class AttackBoard:
+    def __init__(self, target_peer_id, x_offset, y_offset, cell_size=25):
+        self.target_peer_id = target_peer_id
+        self.x_offset = x_offset
+        self.y_offset = y_offset
+        self.cell_size = cell_size
+        self.grid = [[UNEXPLORED for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
+        self.selected_coord = None # Tupla (x, y)
+        
+    def draw(self, screen, font):
+        lbl = font.render(f"Rival: {self.target_peer_id}", True, (255,255,255))
+        screen.blit(lbl, (self.x_offset, self.y_offset - 20))
+        
+        for y in range(BOARD_SIZE):
+            for x in range(BOARD_SIZE):
+                rect = pygame.Rect(self.x_offset + x * self.cell_size, self.y_offset + y * self.cell_size, self.cell_size, self.cell_size)
+                
+                if self.grid[y][x] == UNEXPLORED:
+                    pygame.draw.rect(screen, (30, 40, 80), rect)
+                elif self.grid[y][x] == SELECTED:
+                    pygame.draw.rect(screen, (200, 200, 50), rect)
+                elif self.grid[y][x] == WATER:
+                    pygame.draw.rect(screen, (200, 200, 200), rect)
+                elif self.grid[y][x] == HIT:
+                    pygame.draw.rect(screen, (255, 50, 50), rect)
+                    
+                pygame.draw.rect(screen, GRID_COLOR, rect, 1)
+
+    def handle_event(self, event, is_my_turn):
+        if not is_my_turn:
+            return False
+            
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mouse_x, mouse_y = event.pos
+            if (self.x_offset <= mouse_x < self.x_offset + BOARD_SIZE * self.cell_size and 
+                self.y_offset <= mouse_y < self.y_offset + BOARD_SIZE * self.cell_size):
+                
+                grid_x = (mouse_x - self.x_offset) // self.cell_size
+                grid_y = (mouse_y - self.y_offset) // self.cell_size
+                
+                if self.grid[grid_y][grid_x] == UNEXPLORED or self.grid[grid_y][grid_x] == SELECTED:
+                    if self.selected_coord:
+                        self.grid[self.selected_coord[1]][self.selected_coord[0]] = UNEXPLORED
+                    self.selected_coord = (grid_x, grid_y)
+                    self.grid[grid_y][grid_x] = SELECTED
+                    return True
+        return False
+        
+    def get_selected_coord_str(self):
+        if not self.selected_coord: return None
+        letters = "ABCDEFGHIJKL"
+        x, y = self.selected_coord
+        return f"{letters[x]}{y+1}"
+        
+    def apply_result(self, coord_str, hit):
+        letters = "ABCDEFGHIJKL"
+        x = letters.index(coord_str[0])
+        y = int(coord_str[1:]) - 1
+        self.grid[y][x] = HIT if hit else WATER
+        if self.selected_coord == (x, y):
+            self.selected_coord = None
