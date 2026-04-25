@@ -200,7 +200,7 @@ class Game:
         self.players = {}
         self.ball = Ball(WIDTH // 2, HEIGHT // 2)
         
-        self.sync_timer = 0
+
         self.goal_timer = 0
         
         self.net.start()
@@ -476,17 +476,14 @@ class Game:
                 
                 # Host sync
                 if self.is_host:
-                    self.sync_timer += 1
-                    if self.sync_timer >= 5: # Sync every 5 frames
-                        self.sync_timer = 0
-                        sync_data = {
-                            "ball": {"x": self.ball.x, "y": self.ball.y, "vx": self.ball.vx, "vy": self.ball.vy},
-                            "players": {
-                                pid: {"x": p.x, "y": p.y, "vx": p.vx, "vy": p.vy, "score": p.score}
-                                for pid, p in self.players.items()
-                            }
+                    sync_data = {
+                        "ball": {"x": self.ball.x, "y": self.ball.y, "vx": self.ball.vx, "vy": self.ball.vy},
+                        "players": {
+                            pid: {"x": p.x, "y": p.y, "vx": p.vx, "vy": p.vy, "score": p.score}
+                            for pid, p in self.players.items()
                         }
-                        self.net.send_event("SYNC", **sync_data)
+                    }
+                    self.net.send_event("SYNC", **sync_data)
                         
             # Drawing
             self.screen.fill((135, 206, 235)) # Sky blue
