@@ -154,6 +154,14 @@ class KartGame:
         self.checkpoint_counter = 0
         self.last_tile = 0
 
+        # Laps and race state
+        self.lap_count = 0
+        self.laps_total = 3
+        self.race_over = False
+        self.race_winner = None
+        # finishing order list (peer ids in order of finish)
+        self.finishing_order = []
+
         # Car assignment: local uses P1 by default; peers get unique cars from available pool
         self.local_car = 'P1'
         self.available_cars = ['P1', 'P2', 'P3']
@@ -177,6 +185,7 @@ class KartGame:
                         ty = float(msg.get('y', 0.0))
                         td = float(msg.get('direction', 0.0))
                         spd = float(msg.get('speed', 0.0))
+                        lap = int(float(msg.get('lap', 0)))
                         now_t = time.time()
                         p = self.opponents.get(peer)
                         if p is None:
@@ -198,16 +207,34 @@ class KartGame:
                                     self.opponents[peer]['car'] = car
                                 except Exception:
                                     self.opponents[peer]['car'] = 'P2'
+                                # record lap count
+                                self.opponents[peer]['lap_count'] = lap
                         else:
                             p['x_target'] = tx
                             p['y_target'] = ty
                             p['direction_target'] = td
                             p['speed'] = spd
+                            # update lap count if provided
+                            try:
+                                p['lap_count'] = int(float(msg.get('lap', p.get('lap_count', 0))))
+                            except Exception:
+                                pass
                             p['last_seen'] = now_t
                             # keep p['render_x']/render_y unchanged; smoothing will move them towards target
+                        # if peer reports finished via separate event it will be handled below
                     elif action == 'PLAYER_ELIMINATED':
                         if peer in self.opponents:
                             self.opponents[peer]['eliminated'] = True
+                        elif action == 'PLAYER_FINISHED':
+                            # remote peer declared finish; try to read explicit winner id
+                            winner = msg.get('winner') or peer
+                            if winner not in self.finishing_order:
+                                self.finishing_order.append(winner)
+                            # set race_over so overlay shows
+                            self.race_over = True
+                            # first finisher is winner if we don't already have one
+                            if not self.race_winner:
+                                self.race_winner = self.finishing_order[0]
                 except Exception:
                     pass
 
@@ -219,7 +246,8 @@ class KartGame:
         if not self.net:
             return
         try:
-            self.net.send_event('STATE', x=self.player.x, y=self.player.y, direction=self.player.direction, speed=self.player.speed)
+            # include lap count so peers can know progress
+            self.net.send_event('STATE', x=self.player.x, y=self.player.y, direction=self.player.direction, speed=self.player.speed, lap=self.lap_count)
         except Exception:
             pass
 
@@ -267,9 +295,24 @@ class KartGame:
             self.checkpoint_counter += 1
             print(f"Checkpoint reached! Total checkpoints: {self.checkpoint_counter}")
         elif tile_under == 5 and self.last_tile != 5:
+            # finish line: count lap if all checkpoints passed
             if self.checkpoint_counter >= track_1_checkpoints:
-                print("Finish line reached!")
-                win_window(self.screen)
+                self.lap_count += 1
+                print(f"Lap {self.lap_count}/{self.laps_total} completed!")
+                # reset checkpoint counter for next lap
+                self.checkpoint_counter = 0
+                # notify peers that we've finished if race complete
+                if self.lap_count >= self.laps_total:
+                    # local finished
+                    if self.player.peer_id not in self.finishing_order:
+                        self.finishing_order.append(self.player.peer_id)
+                    self.race_over = True
+                    self.race_winner = self.finishing_order[0]
+                    try:
+                        if self.net:
+                            self.net.send_event('PLAYER_FINISHED', winner=self.player.peer_id)
+                    except Exception:
+                        pass
         self.last_tile = tile_under
 
         # purge stale opponents
@@ -401,9 +444,55 @@ class KartGame:
             font = pygame.font.SysFont(None, 20)
             text = font.render(peer_id, True, (255, 255, 255))
             self.screen.blit(text, (screen_x + 26, screen_y - 10))
+            # show lap count under the name
+            lap_text = font.render(f"Lap: {st.get('lap_count', 0)}/{self.laps_total}", True, (255, 255, 255))
+            self.screen.blit(lap_text, (screen_x + 26, screen_y + 6))
 
         draw_speedometer(self.screen, self.player.speed * 1000)
         draw_debug_info(self.screen, self.player.x, self.player.y, self.player.direction)
+
+        # If race over, draw podium overlay
+        if self.race_over:
+            overlay = pygame.Surface((self.width, self.height), flags=pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 200))
+            self.screen.blit(overlay, (0, 0))
+            title_font = pygame.font.SysFont(None, 64)
+            pod_font = pygame.font.SysFont(None, 36)
+            title = title_font.render("Race Results", True, (255, 215, 0))
+            self.screen.blit(title, title.get_rect(center=(self.width//2, 80)))
+
+            # draw top-3 podium columns (2 left, 1 center, 3 right)
+            center_x = self.width // 2
+            base_y = 220
+            col_w = 180
+            # positions: 2nd, 1st, 3rd
+            positions = [1, 0, 2]
+            offsets = [-col_w, 0, col_w]
+            for i, pos in enumerate(positions):
+                idx = pos
+                x = center_x + offsets[i]
+                # height: first is taller
+                height = 220 if pos == 0 else 160
+                rect = pygame.Rect(x - 70, base_y + (220 - height), 140, height)
+                pygame.draw.rect(self.screen, (200, 200, 200), rect)
+                # get finisher id if present
+                fin_id = self.finishing_order[idx] if idx < len(self.finishing_order) else None
+                if fin_id:
+                    # draw car sprite if available
+                    car_key = self.peer_car_map.get(fin_id) if fin_id in self.peer_car_map else ( 'P1' if fin_id == self.player.peer_id else None )
+                    img = self.player_images.get(car_key) if car_key else None
+                    if img:
+                        simg = pygame.transform.scale(img, (64, 64))
+                        self.screen.blit(simg, simg.get_rect(center=(x, rect.top + 40)))
+                    # name
+                    name_text = pod_font.render(fin_id, True, (0, 0, 0))
+                    self.screen.blit(name_text, name_text.get_rect(center=(x, rect.top + 110)))
+                    # place number
+                    place = pod_font.render(f"#{idx+1}", True, (0, 0, 0))
+                    self.screen.blit(place, place.get_rect(center=(x, rect.bottom - 20)))
+                else:
+                    none_text = pod_font.render("---", True, (0,0,0))
+                    self.screen.blit(none_text, none_text.get_rect(center=(x, rect.top + 80)))
 
         pygame.display.flip()
 
@@ -442,10 +531,15 @@ class KartGame:
                 if event.type == pygame.QUIT:
                     self.running = False
 
-            self.handle_input()
-            self.update()
-            # send state update
-            self.send_state()
+            # If race over, stop updating gameplay but keep drawing and handling quit
+            if not self.race_over:
+                self.handle_input()
+                self.update()
+                # send state update
+                self.send_state()
+            else:
+                # still allow input events (handled above) but skip game updates
+                pass
             self.draw()
 
 
