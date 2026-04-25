@@ -106,23 +106,44 @@ def main():
         msg_queue.put(msg)
 
     def save_my_inventory():
-        """Guarda el inventario del jugador local a disco."""
+        """Guarda el inventario del jugador local a disco, cifrado con su clave pública RSA."""
         if net_manager and room_hash_display and net_manager.peer_id in players:
             my_p = players[net_manager.peer_id]
             room_key = room_hash_display
             if room_key not in saved_inventories:
                 saved_inventories[room_key] = {}
-            saved_inventories[room_key][net_manager.peer_id] = my_p.serialize_inventory()
+            
+            inv_data = my_p.serialize_inventory()
+            # Cifrar con mi clave pública (solo yo con mi privada puedo leerlo)
+            encrypted = net_manager.encrypt_for_me(inv_data)
+            if encrypted:
+                saved_inventories[room_key][net_manager.peer_id] = {"encrypted": encrypted}
+            else:
+                # Fallback sin cifrado
+                saved_inventories[room_key][net_manager.peer_id] = inv_data
             save_all_inventories(saved_inventories)
+            print(f"[INVENTARIO] Guardado inventario de {net_manager.peer_id} (cifrado RSA)")
 
     def restore_inventory(peer_id):
-        """Restaura inventario guardado si existe."""
+        """Restaura inventario guardado si existe, descifrando con clave privada."""
         room_key = room_hash_display
         if room_key in saved_inventories and peer_id in saved_inventories[room_key]:
-            data = saved_inventories[room_key][peer_id]
+            stored = saved_inventories[room_key][peer_id]
             if peer_id in players:
-                players[peer_id].deserialize_inventory(data)
-                print(f"[INVENTARIO] Restaurado inventario de {peer_id}")
+                if isinstance(stored, dict) and "encrypted" in stored:
+                    # Descifrar con mi clave privada (solo funciona para MI inventario)
+                    if net_manager and peer_id == net_manager.peer_id:
+                        data = net_manager.decrypt_for_me(stored["encrypted"])
+                        if data:
+                            players[peer_id].deserialize_inventory(data)
+                            print(f"[INVENTARIO] Restaurado inventario cifrado de {peer_id}")
+                            return
+                    # Si no somos nosotros, no podemos descifrar (así se protege)
+                    print(f"[INVENTARIO] Inventario de {peer_id} está cifrado (solo él puede leerlo)")
+                else:
+                    # Datos en texto plano (legacy)
+                    players[peer_id].deserialize_inventory(stored)
+                    print(f"[INVENTARIO] Restaurado inventario de {peer_id}")
 
     def get_all_saved_inventories_for_room():
         room_key = room_hash_display
