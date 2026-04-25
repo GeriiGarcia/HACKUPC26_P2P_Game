@@ -3,6 +3,8 @@
 import sys
 import pygame
 import math
+import json
+import os
 import time
 
 WIDTH, HEIGHT = 800, 600
@@ -23,44 +25,63 @@ min_start_speed = 0.01
 # Tile map
 tile_size = 32
 
-track_1_tilemap = [
-    [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
-    [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
-    [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
-    [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,5,5,5,5,5,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,2],
-    [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
-    [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
-    [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
-    [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]
-]
-track_1_offset = (5, -2)
-track_1_start_direction = 270
-track_1_checkpoints = 2
+
+
+def _load_track_from_json():
+    """Load track configuration from a JSON file located in ASSETS_DIR/mapes.
+    Expected JSON keys:
+      - tilemap: 2D list of integers
+      - offset: [x, y]
+      - start_direction: int
+      - checkpoints: int
+    If no JSON is found or loading fails, this function leaves the defaults intact.
+    """
+    global track_1_tilemap, track_1_offset, track_1_start_direction, track_1_checkpoints
+    candidates = []
+    mapes_dir = os.path.join(ASSETS_DIR, 'mapes')
+    if os.path.isdir(mapes_dir):
+        # prefer common filenames
+        for name in ('track.json', 'track_1.json', 'track1.json', 'map.json'):
+            candidates.append(os.path.join(mapes_dir, name))
+        # also include any other .json in the folder
+        for fname in os.listdir(mapes_dir):
+            if fname.lower().endswith('.json'):
+                candidates.append(os.path.join(mapes_dir, fname))
+    else:
+        return
+
+    seen = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            # Validate and apply
+            tm = data.get('tilemap') or data.get('track_1_tilemap')
+            off = data.get('offset') or data.get('track_1_offset')
+            sd = data.get('start_direction') or data.get('track_1_start_direction')
+            cp = data.get('checkpoints') or data.get('track_1_checkpoints')
+            if tm and isinstance(tm, list):
+                track_1_tilemap = tm
+            if off and (isinstance(off, list) or isinstance(off, tuple)) and len(off) >= 2:
+                track_1_offset = (int(off[0]), int(off[1]))
+            if sd is not None:
+                track_1_start_direction = int(sd)
+            if cp is not None:
+                track_1_checkpoints = int(cp)
+            print(f"Loaded track config from {path}")
+            return
+        except Exception as e:
+            # try next
+            print(f"Failed to load track config from {path}: {e}")
+
+
+# Attempt to load track config from JSON next to the images
+_load_track_from_json()
 
 
 class Player:
@@ -70,6 +91,8 @@ class Player:
         self.y = float(y)
         self.direction = float(direction)
         self.speed = float(speed)
+        self.prev_x = float(x)
+        self.prev_y = float(y)
         self.last_seen = time.time()
         self.eliminated = False
 
@@ -163,6 +186,9 @@ class KartGame:
 
     def handle_input(self):
         keys = pygame.key.get_pressed()
+        # store previous position to allow robust collision rollback
+        self.player.prev_x = self.player.x
+        self.player.prev_y = self.player.y
         if keys[pygame.K_ESCAPE]:
             self.running = False
 
@@ -192,11 +218,9 @@ class KartGame:
         # Collision resolution
         tile_under = get_tile_type(self.screen, self.player.x, self.player.y)
         if wall_collision(tile_under):
-            # revert movement along dominant axis and stop
-            # approximate previous position
-            # simple approach: step back along direction
-            self.player.x -= self.player.speed * math.cos(math.radians(self.player.direction))
-            self.player.y -= self.player.speed * math.sin(math.radians(self.player.direction))
+            # Collision: restore previous position recorded before movement and stop
+            self.player.x = getattr(self.player, 'prev_x', self.player.x)
+            self.player.y = getattr(self.player, 'prev_y', self.player.y)
             self.player.speed = 0
 
         # Checkpoints
@@ -324,8 +348,8 @@ def main():
 def get_tile_type(screen, x, y):
     # Map world coordinates (x,y) in tile units to tilemap indices.
     # World -> tile index: tile_index = int(world_coord - map_offset)
-    tile_x = int(x) #int((WIDTH/2/tile_size + track_1_offset[0] + x))
-    tile_y = int(y) #int((HEIGHT/2/tile_size + track_1_offset[1] + y))
+    tile_x = int(x-track_1_offset[0]-0.5) #int((WIDTH/2/tile_size + track_1_offset[0] + x))
+    tile_y = int(y-track_1_offset[1]-0.5) #int((HEIGHT/2/tile_size + track_1_offset[1] + y))
 
     font = pygame.font.SysFont(None, 24)
     text = font.render(f"X: {tile_x} Y: {tile_y}", True, (255, 255, 255))
