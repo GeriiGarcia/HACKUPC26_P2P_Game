@@ -29,7 +29,7 @@ class PenaltiesGame:
             if not hasattr(self, 'all_players_sorted'):
                 self.all_players_sorted = ['You', 'Opponent']
         self.shots = []  # list of dicts: {x,y,timestamp,from}
-        self.anim_ttl = 1.2
+        self.anim_ttl = 1.5
         self.game_over = False
         self.winner = None
         self.last_result_text = ""
@@ -117,12 +117,12 @@ class PenaltiesGame:
                         try:
                             shot_id = f"{self.net.peer_id}:{time.time()}"
                             # include kicker index so everyone can compute authoritative next index
-                            self.net.send_event('PENALTY_SHOT', x=sx, y=sy, shooter=self.net.peer_id, shot_id=shot_id, start_time=time.time(), duration=0.5, kicker_index=self.current_kicker_index)
+                            self.net.send_event('PENALTY_SHOT', x=sx, y=sy, shooter=self.net.peer_id, shot_id=shot_id, start_time=time.time(), duration=self.anim_ttl, kicker_index=self.current_kicker_index)
                             local_shot_id = shot_id
                         except Exception:
                             pass
                     # locally add a shot entry (works for both net and local)
-                    shot_entry = {'x': sx, 'y': sy, 'shooter': (self.net.peer_id if self.net else 'You'), 'start_time': time.time(), 'duration': 0.5, 'shot_id': (locals().get('local_shot_id') if 'local_shot_id' in locals() else f"{(self.net.peer_id if self.net else 'You')}:{time.time()}"), 'kicker_index': self.current_kicker_index, 'results': {'saves': set()}, 'finalized': False, 'checked': False}
+                    shot_entry = {'x': sx, 'y': sy, 'shooter': (self.net.peer_id if self.net else 'You'), 'start_time': time.time(), 'duration': self.anim_ttl, 'shot_id': (locals().get('local_shot_id') if 'local_shot_id' in locals() else f"{(self.net.peer_id if self.net else 'You')}:{time.time()}"), 'kicker_index': self.current_kicker_index, 'results': {'saves': set()}, 'finalized': False, 'checked': False}
                     self.shots.append(shot_entry)
                     self.pending_shot = None
                     return True
@@ -139,7 +139,7 @@ class PenaltiesGame:
             shooter = msg.get('shooter') or msg.get('peerId')
             shot_id = msg.get('shot_id') or f"{shooter}:{msg.get('start_time', time.time())}"
             start_time = msg.get('start_time') or time.time()
-            duration = msg.get('duration') or 0.5
+            duration = msg.get('duration') or self.anim_ttl
             kicker_idx = msg.get('kicker_index')
             # add shot animation
             shot_entry = {'x': x, 'y': y, 'shooter': shooter, 'start_time': start_time, 'duration': duration, 'shot_id': shot_id, 'kicker_index': kicker_idx, 'results': {'saves': set()}, 'finalized': False, 'checked': False}
@@ -265,7 +265,7 @@ class PenaltiesGame:
         # animate and resolve shots
         for s in list(self.shots):
             elapsed = now - s['start_time']
-            duration = s.get('duration', 1.0)
+            duration = s.get('duration', self.anim_ttl)
             t = min(1.0, max(0.0, elapsed / duration))
             # interpolate from rest to target
             rx, ry = self.ball_rest_pos
