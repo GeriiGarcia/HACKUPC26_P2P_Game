@@ -63,6 +63,17 @@ track_1_start_direction = 270
 track_1_checkpoints = 2
 
 
+class Player:
+    def __init__(self, peer_id='local', x=0.0, y=0.0, direction=0.0, speed=0.0):
+        self.peer_id = peer_id
+        self.x = float(x)
+        self.y = float(y)
+        self.direction = float(direction)
+        self.speed = float(speed)
+        self.last_seen = time.time()
+        self.eliminated = False
+
+
 class KartGame:
     def __init__(self, net_manager=None, screen_size=(WIDTH, HEIGHT)):
         self.net = net_manager
@@ -84,10 +95,12 @@ class KartGame:
         self.tile_finish_line = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/blue.png").convert()
 
         # Player state
-        self.x = 0.0
-        self.y = 0.0
-        self.direction = track_1_start_direction
-        self.total_speed = 0.001
+        self.player = Player(peer_id=(self.net.peer_id if self.net else 'local'))
+        # Spawn at tile (8,8) in the tilemap. Convert tile indices to world coordinates by adding map offset.
+        self.player.x = 8 + track_1_offset[0]
+        self.player.y = 8 + track_1_offset[1]
+        self.player.direction = track_1_start_direction
+        self.player.speed = 0.001
         self.checkpoint_counter = 0
         self.last_tile = 0
 
@@ -144,7 +157,7 @@ class KartGame:
         if not self.net:
             return
         try:
-            self.net.send_event('STATE', x=self.x, y=self.y, direction=self.direction, speed=self.total_speed)
+            self.net.send_event('STATE', x=self.player.x, y=self.player.y, direction=self.player.direction, speed=self.player.speed)
         except Exception:
             pass
 
@@ -155,36 +168,36 @@ class KartGame:
 
         # Turning
         if keys[pygame.K_LEFT]:
-            self.direction = (self.direction + 1) % 360
-            self.total_speed = max(min_speed, self.total_speed * turning_deceleration)
+            self.player.direction = (self.player.direction - 1) % 360
+            self.player.speed = max(min_speed, self.player.speed * turning_deceleration)
         if keys[pygame.K_RIGHT]:
-            self.direction = (self.direction - 1) % 360
-            self.total_speed = max(min_speed, self.total_speed * turning_deceleration)
+            self.player.direction = (self.player.direction + 1) % 360
+            self.player.speed = max(min_speed, self.player.speed * turning_deceleration)
 
         # Acceleration / braking
         if keys[pygame.K_UP]:
-            self.total_speed = min(max_speed, max(min_start_speed, self.total_speed * acceleration))
-            self.y += self.total_speed * math.sin(math.radians(self.direction))
-            self.x += self.total_speed * math.cos(math.radians(self.direction))
+            self.player.speed = min(max_speed, max(min_start_speed, self.player.speed * acceleration))
+            self.player.y += self.player.speed * math.sin(math.radians(self.player.direction))
+            self.player.x += self.player.speed * math.cos(math.radians(self.player.direction))
         elif keys[pygame.K_DOWN]:
-            self.total_speed = max(max_back_speed, self.total_speed * break_deceleration)
-            self.x += self.total_speed * math.cos(math.radians(self.direction))
-            self.y += self.total_speed * math.sin(math.radians(self.direction))
+            self.player.speed = max(max_back_speed, self.player.speed * break_deceleration)
+            self.player.x += self.player.speed * math.cos(math.radians(self.player.direction))
+            self.player.y += self.player.speed * math.sin(math.radians(self.player.direction))
         else:
-            self.total_speed = max(min_speed, self.total_speed * no_gas_deceleration)
-            self.x += self.total_speed * math.cos(math.radians(self.direction))
-            self.y += self.total_speed * math.sin(math.radians(self.direction))
+            self.player.speed = max(min_speed, self.player.speed * no_gas_deceleration)
+            self.player.x += self.player.speed * math.cos(math.radians(self.player.direction))
+            self.player.y += self.player.speed * math.sin(math.radians(self.player.direction))
 
     def update(self):
         # Collision resolution
-        tile_under = get_tile_type(self.screen, self.x, self.y)
+        tile_under = get_tile_type(self.screen, self.player.x, self.player.y)
         if wall_collision(tile_under):
             # revert movement along dominant axis and stop
             # approximate previous position
             # simple approach: step back along direction
-            self.x -= self.total_speed * math.cos(math.radians(self.direction))
-            self.y -= self.total_speed * math.sin(math.radians(self.direction))
-            self.total_speed = 0
+            self.player.x -= self.player.speed * math.cos(math.radians(self.player.direction))
+            self.player.y -= self.player.speed * math.sin(math.radians(self.player.direction))
+            self.player.speed = 0
 
         # Checkpoints
         if tile_under == 4 and self.last_tile != 4:
@@ -228,7 +241,11 @@ class KartGame:
         for row in range(len(track_1_tilemap)):
             for col in range(len(track_1_tilemap[row])):
                 tile_type = track_1_tilemap[row][col]
-                pos = ((col + track_1_offset[0] + self.x) * tile_size, (row + track_1_offset[1] + self.y) * tile_size)
+                # Convert tile (col,row) into screen coordinates centered on the local player
+                pos = (
+                    self.width//2 + int((col + track_1_offset[0] - self.player.x) * tile_size),
+                    self.height//2 + int((row + track_1_offset[1] - self.player.y) * tile_size)
+                )
                 if tile_type == 0:
                     self.screen.blit(self.tile_green, pos)
                 elif tile_type == 1:
@@ -254,15 +271,15 @@ class KartGame:
             color = (100, 100, 100) if st.get('eliminated') else self._color_for_peer(peer_id)
             rx = st.get('render_x', st.get('x_target', 0.0))
             ry = st.get('render_y', st.get('y_target', 0.0))
-            screen_x = self.width//2 + int((rx - self.x) * tile_size)
-            screen_y = self.height//2 + int((ry - self.y) * tile_size)
+            screen_x = self.width//2 + int((rx - self.player.x) * tile_size)
+            screen_y = self.height//2 + int((ry - self.player.y) * tile_size)
             pygame.draw.circle(self.screen, color, (screen_x, screen_y), 24)
             font = pygame.font.SysFont(None, 20)
             text = font.render(peer_id, True, (255, 255, 255))
             self.screen.blit(text, (screen_x + 26, screen_y - 10))
 
-        draw_speedometer(self.screen, self.total_speed * 1000)
-        draw_debug_info(self.screen, self.x, self.y, self.direction)
+        draw_speedometer(self.screen, self.player.speed * 1000)
+        draw_debug_info(self.screen, self.player.x, self.player.y, self.player.direction)
 
         pygame.display.flip()
 
@@ -305,6 +322,8 @@ def main():
 
 
 def get_tile_type(screen, x, y):
+    # Map world coordinates (x,y) in tile units to tilemap indices.
+    # World -> tile index: tile_index = int(world_coord - map_offset)
     tile_x = int((WIDTH/2/tile_size - track_1_offset[0] - x)) 
     tile_y = int((HEIGHT/2/tile_size - track_1_offset[1] - y))
 
