@@ -623,7 +623,7 @@ def main():
                         except Exception:
                             continue
 
-                        shot_result = my_board.receive_shot(x, y, attacker_id=sender)
+                        shot_result = my_board.receive_shot(x, y)
                         hit = shot_result.get("hit", False)
                         sunk = shot_result.get("sunk", False)
                         sunk_cells = shot_result.get("sunk_cells", [])
@@ -658,17 +658,17 @@ def main():
                 eliminated_flag = msg.get("eliminated", False)
                 eliminated_peer = msg.get("eliminated_peer") or sender
 
-                if target_peer == net_manager.peer_id:
-                    for ab in attack_boards:
-                        if ab.target_peer_id == sender:
-                            if coord:
-                                ab.apply_result(coord, hit, sunk=sunk)
-                            # Cuando hundís un barco, aplicar X en todas las celdas del barco
-                            if sunk and sunk_cells:
-                                ab.apply_sunk_cells(sunk_cells)
+                # Estado compartido: todos los jugadores ven impactos/hundimientos.
+                for ab in attack_boards:
+                    if ab.target_peer_id == sender:
+                        if coord:
+                            ab.apply_result(coord, hit, sunk=sunk)
+                        if sunk and sunk_cells:
+                            ab.apply_sunk_cells(sunk_cells)
 
-                            status_txt = "HUNDIDO" if sunk else ("Tocado" if hit else "Agua")
-                            print(f"[JUEGO] Resultado de ataque a {sender} en {coord}: {status_txt}")
+                if target_peer == net_manager.peer_id:
+                    status_txt = "HUNDIDO" if sunk else ("Tocado" if hit else "Agua")
+                    print(f"[JUEGO] Resultado de ataque a {sender} en {coord}: {status_txt}")
 
                 if eliminated_flag and eliminated_peer:
                     announce_elimination(eliminated_peer, source="remote")

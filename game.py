@@ -37,10 +37,6 @@ class Board:
         self.placing_vertical = False
         self.is_ready = False
         self.salt = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
-        # Seguimiento por atacante para evitar que el progreso de hundimiento
-        # se mezcle entre jugadores distintos.
-        self.hits_by_attacker = {}      # attacker_id -> set((x, y))
-        self.sunk_by_attacker = {}      # attacker_id -> set(ship_id)
 
     def draw(self, screen, font, show_status_text=True):
         # Dibujar cuadricula
@@ -182,35 +178,6 @@ class Board:
                 return ship
         return None
 
-    def _register_attacker_hit(self, attacker_id, x, y):
-        if not attacker_id:
-            return
-        hits = self.hits_by_attacker.setdefault(attacker_id, set())
-        hits.add((x, y))
-
-    def _is_ship_sunk_by_attacker(self, ship, attacker_id):
-        if not ship or not attacker_id:
-            return False
-        hits = self.hits_by_attacker.get(attacker_id, set())
-        for cx, cy in self._ship_cells(ship):
-            if (cx, cy) not in hits:
-                return False
-        return True
-
-    def _was_ship_already_reported_sunk_to_attacker(self, ship, attacker_id):
-        if not ship or not attacker_id:
-            return False
-        ship_id = id(ship)
-        reported = self.sunk_by_attacker.get(attacker_id, set())
-        return ship_id in reported
-
-    def _mark_ship_reported_sunk_to_attacker(self, ship, attacker_id):
-        if not ship or not attacker_id:
-            return
-        ship_id = id(ship)
-        reported = self.sunk_by_attacker.setdefault(attacker_id, set())
-        reported.add(ship_id)
-
     def _is_ship_sunk(self, ship):
         if not ship:
             return False
@@ -233,7 +200,7 @@ class Board:
     def are_all_ships_sunk(self):
         return all(getattr(ship, "sunk", False) for ship in self.ships)
 
-    def receive_shot(self, x, y, attacker_id=None):
+    def receive_shot(self, x, y):
         """
         Procesa un disparo entrante sobre el tablero propio.
         Devuelve un dict con hit, sunk, sunk_cells y eliminated.
@@ -248,39 +215,22 @@ class Board:
             self.grid[y][x] = 2
             return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
-        # Ya disparada agua
+        # Ya disparada (agua)
         if cell == 2:
             return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
-        # Impacto en cualquier celda de barco (intacto, tocado o hundido globalmente)
-        if cell in (1, 3, 4):
+        if cell in (3, 4):
+            return {"hit": True, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
+
+        # Impacto en barco intacto
+        if cell == 1:
+            self.grid[y][x] = 3
             ship = self._ship_at(x, y)
-            if not ship:
-                return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
-
-            # Marcar daño global para el tablero de defensa
-            if cell == 1:
-                self.grid[y][x] = 3
-
-            # Registrar impacto para este atacante (aislado por peer)
-            self._register_attacker_hit(attacker_id, x, y)
-
-            # Hundimiento global (defensor eliminado cuando todas sus naves están hundidas)
-            if not ship.sunk and self._is_ship_sunk(ship):
-                self._mark_ship_sunk(ship)
-
-            # Hundimiento reportado al atacante SOLO con su propio progreso
             sunk = False
             sunk_cells = []
-            if (
-                attacker_id
-                and self._is_ship_sunk_by_attacker(ship, attacker_id)
-                and not self._was_ship_already_reported_sunk_to_attacker(ship, attacker_id)
-            ):
+            if ship and self._is_ship_sunk(ship):
+                sunk_cells = self._mark_ship_sunk(ship)
                 sunk = True
-                sunk_cells = self._ship_cells(ship)
-                self._mark_ship_reported_sunk_to_attacker(ship, attacker_id)
-
             return {"hit": True, "sunk": sunk, "sunk_cells": sunk_cells, "eliminated": self.are_all_ships_sunk()}
 
         return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
