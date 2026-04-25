@@ -6,11 +6,31 @@ import queue
 import math
 import random
 import time
+import json
+import os
 from pygame.locals import *
 from ui import Button, TextInput
 from network import NetworkManager
 from minecraft_core import World, Player, B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT, B_GRASS, B_SAND
 from minecraft_render import Renderer, BLOCK_SIZE_PX
+
+INVENTORY_SAVE_FILE = "inventories.json"
+
+def load_all_inventories():
+    if os.path.exists(INVENTORY_SAVE_FILE):
+        try:
+            with open(INVENTORY_SAVE_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_all_inventories(data):
+    try:
+        with open(INVENTORY_SAVE_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Error guardando inventarios: {e}")
 
 # Configuración básica
 WIDTH, HEIGHT = 800, 600
@@ -76,6 +96,7 @@ def main():
     input_jump = False
     input_tab_held = False
     input_inventory_open = False
+    saved_inventories = load_all_inventories()  # {room_hash: {peer_name: {inventory data}}}
     
     def set_opengl_mode():
         global WIDTH, HEIGHT
@@ -84,17 +105,43 @@ def main():
     def on_message_received(msg):
         msg_queue.put(msg)
 
+    def save_my_inventory():
+        """Guarda el inventario del jugador local a disco."""
+        if net_manager and room_hash_display and net_manager.peer_id in players:
+            my_p = players[net_manager.peer_id]
+            room_key = room_hash_display
+            if room_key not in saved_inventories:
+                saved_inventories[room_key] = {}
+            saved_inventories[room_key][net_manager.peer_id] = my_p.serialize_inventory()
+            save_all_inventories(saved_inventories)
+
+    def restore_inventory(peer_id):
+        """Restaura inventario guardado si existe."""
+        room_key = room_hash_display
+        if room_key in saved_inventories and peer_id in saved_inventories[room_key]:
+            data = saved_inventories[room_key][peer_id]
+            if peer_id in players:
+                players[peer_id].deserialize_inventory(data)
+                print(f"[INVENTARIO] Restaurado inventario de {peer_id}")
+
+    def get_all_saved_inventories_for_room():
+        room_key = room_hash_display
+        return saved_inventories.get(room_key, {})
+
     def on_peer_connected(peer_id):
-        if current_state == STATE_GAME:
-            if is_host:
-                modified = world.get_modified_blocks_list() if world else []
-                net_manager.send_event("LATE_JOIN_SYNC", 
-                                       target_peer=peer_id, 
-                                       seed=world_seed, 
-                                       players=list(players.keys()) + [net_manager.peer_id], 
-                                       modified_blocks=modified)
+        if current_state == STATE_GAME and world:
+            # Cualquier jugador ya en partida envía el sync (no solo el host)
+            modified = world.get_modified_blocks_list()
+            inv_data = get_all_saved_inventories_for_room()
+            net_manager.send_event("LATE_JOIN_SYNC", 
+                                   target_peer=peer_id, 
+                                   seed=world_seed, 
+                                   players=list(players.keys()), 
+                                   modified_blocks=modified,
+                                   inventories=inv_data)
             if peer_id not in players:
                 players[peer_id] = Player()
+                restore_inventory(peer_id)
 
     # Elementos UI - Menú Principal
     btn_create = Button(WIDTH//2 - 150, HEIGHT//2 - 50, 300, 50, "Crear una nueva sala", font_normal)
@@ -315,8 +362,8 @@ def main():
                 renderer = Renderer(WIDTH, HEIGHT)
                 current_state = STATE_GAME
                 
-            elif action == "LATE_JOIN_SYNC" and current_state == STATE_LOBBY:
-                if msg.get("target_peer") == net_manager.peer_id:
+            elif action == "LATE_JOIN_SYNC":
+                if msg.get("target_peer") == net_manager.peer_id and current_state != STATE_GAME:
                     world_seed = msg.get("seed", 0)
                     print(f"Sincronizando partida iniciada. Seed: {world_seed}")
                     world = World(seed=world_seed)
@@ -326,6 +373,16 @@ def main():
                         if p != net_manager.peer_id:
                             players[p] = Player()
                     world.apply_modified_blocks(msg.get("modified_blocks", []))
+                    # Restaurar inventarios recibidos
+                    inv_data = msg.get("inventories", {})
+                    if inv_data:
+                        room_key = room_hash_display
+                        if room_key not in saved_inventories:
+                            saved_inventories[room_key] = {}
+                        saved_inventories[room_key].update(inv_data)
+                        save_all_inventories(saved_inventories)
+                    # Restaurar mi propio inventario
+                    restore_inventory(net_manager.peer_id)
                     screen = set_opengl_mode()
                     renderer = Renderer(WIDTH, HEIGHT)
                     current_state = STATE_GAME
@@ -338,6 +395,10 @@ def main():
                     world.set_block(x, y, b_type)
                     
             elif action == "PLAYER_MOVE" and current_state == STATE_GAME:
+                # Crear jugador si no lo conocíamos (reconexión o late join)
+                if sender and sender not in players:
+                    players[sender] = Player()
+                    restore_inventory(sender)
                 if sender in players:
                     players[sender].x = msg.get("x", players[sender].x)
                     players[sender].y = msg.get("y", players[sender].y)
@@ -442,6 +503,11 @@ def main():
                 if now - last_move_send > 0.05: # Send 20 times a second
                     net_manager.send_event("PLAYER_MOVE", x=my_player.x, y=my_player.y, vx=my_player.vx, vy=my_player.vy)
                     last_move_send = now
+                
+                # Auto-save inventory every 10 seconds
+                if int(now) % 10 == 0 and int(now) != getattr(main, '_last_inv_save', 0):
+                    main._last_inv_save = int(now)
+                    save_my_inventory()
 
             if renderer and world:
                 renderer.render(world, players, net_manager.peer_id, input_tab_held, input_inventory_open, font_normal)
@@ -449,6 +515,8 @@ def main():
         pygame.display.flip()
         clock.tick(FPS)
 
+    # Guardar inventario antes de salir
+    save_my_inventory()
     pygame.quit()
     sys.exit()
 

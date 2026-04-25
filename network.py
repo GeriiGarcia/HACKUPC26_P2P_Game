@@ -152,10 +152,13 @@ class NetworkManager:
                 break
         
         client_sock.close()
-        # Si se desconectó, podríamos intentar reconectar o marcarlo como caído
+        # Limpiar el peer desconectado para que send_event no intente enviar
         if connected_peer_id and connected_peer_id in self.peers:
-            # del self.peers[connected_peer_id] # Dejamos la info para reconexiones (opcional)
-            pass
+            # Solo borrar si el socket almacenado es exactamente el que se cerró
+            stored_sock = self.peers[connected_peer_id].get("socket")
+            if stored_sock is client_sock:
+                del self.peers[connected_peer_id]
+                print(f"[NETWORK] 🔌 Peer desconectado: {connected_peer_id}")
 
     def _process_incoming_message(self, msg, client_sock, addr):
         """Procesa un evento JSON entrante. Actualiza las réplicas del ledger."""
@@ -166,32 +169,35 @@ class NetworkManager:
         # 1. Gestionar el protocolo de saludo (Handshake)
         if msg.get("action") == "HELLO":
             if msg.get("room_hash") == self.room_hash and sender_id != self.peer_id:
-                if sender_id not in self.peers:
-                    self.peers[sender_id] = {"socket": client_sock, "ip": addr[0], "port": addr[1]}
+                is_new = sender_id not in self.peers
+                # Siempre actualizar el socket (reconexión)
+                self.peers[sender_id] = {"socket": client_sock, "ip": addr[0], "port": addr[1]}
+                if sender_id not in self.ledgers:
                     self.ledgers[sender_id] = []
                     
-                    pk_pem = msg.get("public_key")
-                    if pk_pem:
-                        try:
-                            self.peer_public_keys[sender_id] = rsa.PublicKey.load_pkcs1(pk_pem.encode('utf-8'))
-                        except Exception as e:
-                            print(f"[NETWORK] Error procesando clave pública de {sender_id}: {e}")
-
-                    print(f"[NETWORK] ✅ Conexión TCP establecida con {sender_id}")
-                    # Enviar un HELLO de vuelta por si él no nos había añadido aún
-                    hello_back = {
-                        "action": "HELLO", 
-                        "peerId": self.peer_id, 
-                        "room_hash": self.room_hash,
-                        "public_key": self.public_key.save_pkcs1().decode('utf-8') if self.public_key else None
-                    }
+                pk_pem = msg.get("public_key")
+                if pk_pem:
                     try:
-                        client_sock.sendall((json.dumps(hello_back) + "\n").encode('utf-8'))
-                    except Exception:
-                        pass
+                        self.peer_public_keys[sender_id] = rsa.PublicKey.load_pkcs1(pk_pem.encode('utf-8'))
+                    except Exception as e:
+                        print(f"[NETWORK] Error procesando clave pública de {sender_id}: {e}")
+
+                tag = "reconectado" if not is_new else "establecida"
+                print(f"[NETWORK] ✅ Conexión TCP {tag} con {sender_id}")
+                # Enviar un HELLO de vuelta por si él no nos había añadido aún
+                hello_back = {
+                    "action": "HELLO", 
+                    "peerId": self.peer_id, 
+                    "room_hash": self.room_hash,
+                    "public_key": self.public_key.save_pkcs1().decode('utf-8') if self.public_key else None
+                }
+                try:
+                    client_sock.sendall((json.dumps(hello_back) + "\n").encode('utf-8'))
+                except Exception:
+                    pass
                     
-                    if self.on_peer_connected:
-                        self.on_peer_connected(sender_id)
+                if self.on_peer_connected:
+                    self.on_peer_connected(sender_id)
             return sender_id
 
         # 2. Gestionar eventos normales de partida (Ledger Réplica)
