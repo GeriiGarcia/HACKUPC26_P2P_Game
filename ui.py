@@ -61,5 +61,19 @@ class TextInput:
                     pass # Handled externally usually
                 elif event.key == pygame.K_BACKSPACE:
                     self.text = self.text[:-1]
+                elif event.key == pygame.K_v and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                    # Pegar desde el portapapeles
+                    import subprocess
+                    try:
+                        res = subprocess.run(['wl-paste'], capture_output=True, text=True, check=True)
+                        self.text += res.stdout.strip()
+                    except (FileNotFoundError, subprocess.CalledProcessError):
+                        try:
+                            res = subprocess.run(['xclip', '-selection', 'clipboard', '-o'], capture_output=True, text=True, check=True)
+                            self.text += res.stdout.strip()
+                        except (FileNotFoundError, subprocess.CalledProcessError):
+                            pass
                 else:
-                    self.text += event.unicode
+                    # Evitar caracteres raros si se presiona Ctrl
+                    if not (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                        self.text += event.unicode
