@@ -32,7 +32,7 @@ class Player:
         # Dimensions
         self.head_radius = 35
         self.body_w = 40
-        self.body_h = 50
+        self.body_h = 25
         
         self.speed = 5
         self.jump_force = 13
@@ -293,8 +293,8 @@ class Game:
             "left": keys[pygame.K_a],
             "right": keys[pygame.K_d],
             "jump": keys[pygame.K_w],
-            "kick": keys[pygame.K_m],
-            "head": keys[pygame.K_SPACE]
+            "kick": keys[pygame.K_SPACE],
+            "head": keys[pygame.K_w]
         }
         
         # Send only if changed or periodically
@@ -375,10 +375,12 @@ class Game:
             dist_foot = math.hypot(self.ball.x - cx_f, self.ball.y - cy_f)
             
             if dist_foot < self.ball.radius and p.kick_timer > 0:
-                # Powerful kick
+                # Powerful kick, height depends on distance
                 direction = 1 if p.is_left else -1
+                dist_ratio = max(0.0, min(1.0, dist_foot / self.ball.radius))
+                vertical_kick = -16 * (1 - dist_ratio) - 4 * dist_ratio
                 self.ball.vx = direction * 18
-                self.ball.vy = -8
+                self.ball.vy = vertical_kick
                 p.kick_timer = 0 # consume kick
 
     def check_goals(self):
