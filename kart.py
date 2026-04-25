@@ -3,6 +3,7 @@
 import sys
 import pygame
 import math
+import time
 
 WIDTH, HEIGHT = 800, 600
 FPS = 60
@@ -62,129 +63,193 @@ track_1_start_direction = 270
 track_1_checkpoints = 2
 
 
+class KartGame:
+    def __init__(self, net_manager=None, screen_size=(WIDTH, HEIGHT)):
+        self.net = net_manager
+        self.width, self.height = screen_size
 
+        # Pygame setup (only initialize display here; caller may have initialized pygame)
+        if not pygame.get_init():
+            pygame.init()
+        self.screen = pygame.display.set_mode((self.width, self.height))
+        pygame.display.set_caption("Pygame Kart - P2P")
+        self.clock = pygame.time.Clock()
 
-def main():
-    pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("Pygame Demo")
-    clock = pygame.time.Clock()
+        # Load assets
+        self.tile_green = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/green.png").convert()
+        self.tile_gray = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/gray.png").convert()
+        self.tile_yellow = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/yellow.png").convert()
+        self.tile_blue = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/blue.png").convert()
+        self.tile_checkpoint = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/gray.png").convert()
+        self.tile_finish_line = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/blue.png").convert()
 
+        # Player state
+        self.x = 0.0
+        self.y = 0.0
+        self.direction = track_1_start_direction
+        self.total_speed = 0.001
+        self.checkpoint_counter = 0
+        self.last_tile = 0
 
-    # Variables del joc
-    x, y = 0, 0
-    direction = track_1_start_direction
-    total_speed = 0.001
-    checkpoint_counter = 0
-    last_tile = 0
-    
-    # Carreguem les imatges
-    tile_green = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/green.png").convert()
-    tile_gray = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/gray.png").convert()
-    tile_yellow = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/yellow.png").convert()
-    tile_blue = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/blue.png").convert()
-    tile_checkpoint = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/gray.png").convert()
-    tile_finish_line = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/blue.png").convert()
-    
-    running = True
-    while running:
-        
-        # Esborrar la pantalla
-        screen.fill((0, 0, 0))
-        
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-        
+        # Opponents state: peer_id -> {x,y,direction,speed,last_seen,eliminated}
+        self.opponents = {}
+
+        # Network callback
+        if self.net:
+            def _on_msg(msg):
+                try:
+                    action = msg.get('action')
+                    peer = msg.get('peerId')
+                    if not peer or peer == self.net.peer_id:
+                        return
+                    if action == 'STATE':
+                        self.opponents[peer] = {
+                            'x': float(msg.get('x', 0.0)),
+                            'y': float(msg.get('y', 0.0)),
+                            'direction': float(msg.get('direction', 0.0)),
+                            'speed': float(msg.get('speed', 0.0)),
+                            'last_seen': time.time(),
+                            'eliminated': False
+                        }
+                    elif action == 'PLAYER_ELIMINATED':
+                        if peer in self.opponents:
+                            self.opponents[peer]['eliminated'] = True
+                except Exception:
+                    pass
+
+            self.net.on_message_received = _on_msg
+
+        self.running = False
+
+    def send_state(self):
+        if not self.net:
+            return
+        try:
+            self.net.send_event('STATE', x=self.x, y=self.y, direction=self.direction, speed=self.total_speed)
+        except Exception:
+            pass
+
+    def handle_input(self):
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_ESCAPE]:
+            self.running = False
+
+        # Turning
+        if keys[pygame.K_LEFT]:
+            self.direction = (self.direction + 1) % 360
+            self.total_speed = max(min_speed, self.total_speed * turning_deceleration)
+        if keys[pygame.K_RIGHT]:
+            self.direction = (self.direction - 1) % 360
+            self.total_speed = max(min_speed, self.total_speed * turning_deceleration)
+
+        # Acceleration / braking
+        if keys[pygame.K_UP]:
+            self.total_speed = min(max_speed, max(min_start_speed, self.total_speed * acceleration))
+            self.y += self.total_speed * math.sin(math.radians(self.direction))
+            self.x += self.total_speed * math.cos(math.radians(self.direction))
+        elif keys[pygame.K_DOWN]:
+            self.total_speed = max(max_back_speed, self.total_speed * break_deceleration)
+            self.x += self.total_speed * math.cos(math.radians(self.direction))
+            self.y += self.total_speed * math.sin(math.radians(self.direction))
+        else:
+            self.total_speed = max(min_speed, self.total_speed * no_gas_deceleration)
+            self.x += self.total_speed * math.cos(math.radians(self.direction))
+            self.y += self.total_speed * math.sin(math.radians(self.direction))
+
+    def update(self):
+        # Collision resolution
+        tile_under = get_tile_type(self.screen, self.x, self.y)
+        if wall_collision(tile_under):
+            # revert movement along dominant axis and stop
+            # approximate previous position
+            # simple approach: step back along direction
+            self.x -= self.total_speed * math.cos(math.radians(self.direction))
+            self.y -= self.total_speed * math.sin(math.radians(self.direction))
+            self.total_speed = 0
+
+        # Checkpoints
+        if tile_under == 4 and self.last_tile != 4:
+            self.checkpoint_counter += 1
+            print(f"Checkpoint reached! Total checkpoints: {self.checkpoint_counter}")
+        elif tile_under == 5 and self.last_tile != 5:
+            if self.checkpoint_counter >= track_1_checkpoints:
+                print("Finish line reached!")
+                win_window(self.screen)
+        self.last_tile = tile_under
+
+        # purge stale opponents
+        now = time.time()
+        for p in list(self.opponents.keys()):
+            if now - self.opponents[p].get('last_seen', 0) > 10:
+                del self.opponents[p]
+
+    def draw(self):
+        # Clear
+        self.screen.fill((0, 0, 0))
+
         # Tilemap drawing
         for row in range(len(track_1_tilemap)):
             for col in range(len(track_1_tilemap[row])):
                 tile_type = track_1_tilemap[row][col]
+                pos = ((col + track_1_offset[0] + self.x) * tile_size, (row + track_1_offset[1] + self.y) * tile_size)
                 if tile_type == 0:
-                    screen.blit(tile_green, ((col + track_1_offset[0] + x) * tile_size, (row + track_1_offset[1] + y) * tile_size))
+                    self.screen.blit(self.tile_green, pos)
                 elif tile_type == 1:
-                    screen.blit(tile_gray, ((col + track_1_offset[0] + x) * tile_size, (row + track_1_offset[1] + y) * tile_size))
+                    self.screen.blit(self.tile_gray, pos)
                 elif tile_type == 2:
-                    screen.blit(tile_yellow, ((col + track_1_offset[0] + x) * tile_size, (row + track_1_offset[1] + y) * tile_size))
+                    self.screen.blit(self.tile_yellow, pos)
                 elif tile_type == 3:
-                    screen.blit(tile_blue, ((col + track_1_offset[0] + x) * tile_size, (row + track_1_offset[1] + y) * tile_size))
+                    self.screen.blit(self.tile_blue, pos)
                 elif tile_type == 4:
-                    screen.blit(tile_checkpoint, ((col + track_1_offset[0] + x) * tile_size, (row + track_1_offset[1] + y) * tile_size))
+                    self.screen.blit(self.tile_checkpoint, pos)
                 elif tile_type == 5:
-                    screen.blit(tile_finish_line, ((col + track_1_offset[0] + x) * tile_size, (row + track_1_offset[1] + y) * tile_size))
-                      
-        
-        pygame.draw.rect(screen, (255, 0, 255), (col * tile_size, row * tile_size, tile_size, tile_size))   
-        
-        
-        # Handle inputs
-        
-        keys = pygame.key.get_pressed()
-        # remember previous position to resolve collisions
-        prev_x, prev_y = x, y
-        if keys[pygame.K_ESCAPE]:
-            running = False
-            
-        # Turning logic
-        if keys[pygame.K_LEFT]:
-            direction += 1
-            if direction >= 360:
-                direction = 0
-            total_speed = max(min_speed, total_speed * turning_deceleration)
-        if keys[pygame.K_RIGHT]:
-            direction -= 1
-            if direction < 0:
-                direction = 359
-            total_speed = max(min_speed, total_speed * turning_deceleration)
-            
-        # Acceleration logic
-        if keys[pygame.K_UP]:
-            total_speed = min(max_speed, max(min_start_speed, total_speed * acceleration))
-            y += total_speed * math.sin(math.radians(direction))
-            x += total_speed * math.cos(math.radians(direction))
-        if keys[pygame.K_DOWN]:
-            total_speed = min(max_back_speed, total_speed * break_deceleration)
-            x += total_speed * math.cos(math.radians(direction))
-            y += total_speed * math.sin(math.radians(direction))
-        if (not keys[pygame.K_UP] and not keys[pygame.K_DOWN]):
-            total_speed = max(min_speed, total_speed * no_gas_deceleration)
-            x += total_speed * math.cos(math.radians(direction))
-            y += total_speed * math.sin(math.radians(direction))
-        
-        # After movement, check collision with wall tiles and resolve
-        tile_under = get_tile_type(screen, x, y)
-        if wall_collision(tile_under):
-            # revert movement along dominant axis and stop the player
-            dx = x - prev_x
-            dy = y - prev_y
-            if abs(dx) > abs(dy):
-                x = prev_x
-            else:
-                y = prev_y
-            total_speed = 0
+                    self.screen.blit(self.tile_finish_line, pos)
 
+        # Debug rectangle last drawn tile (keep behavior similar)
+        pygame.draw.rect(self.screen, (255, 0, 255), (col * tile_size, row * tile_size, tile_size, tile_size))
 
-        # Checkpoint logic
-        if tile_under == 4 and last_tile != 4:
-            checkpoint_counter += 1
-            print(f"Checkpoint reached! Total checkpoints: {checkpoint_counter}")
-        elif tile_under == 5 and last_tile != 5:
-            if checkpoint_counter >= track_1_checkpoints:
-                print("Finish line reached!")
-                win_window(screen)
-        last_tile = tile_under
+        # Draw local player at center
+        pygame.draw.circle(self.screen, (200, 30, 30), (self.width//2, self.height//2), 30)
 
-        # Player drawing
-        pygame.draw.circle(screen, (200, 30, 30), (WIDTH/2, HEIGHT/2), 30)
-        draw_speedometer(screen, total_speed * 1000)
-        draw_debug_info(screen, x, y, direction)
+        # Draw opponents
+        for peer_id, st in self.opponents.items():
+            color = (100, 100, 100) if st.get('eliminated') else (30, 120, 200)
+            screen_x = self.width//2 + int((st['x'] - self.x) * tile_size)
+            screen_y = self.height//2 + int((st['y'] - self.y) * tile_size)
+            pygame.draw.circle(self.screen, color, (screen_x, screen_y), 24)
+            font = pygame.font.SysFont(None, 20)
+            text = font.render(peer_id, True, (255, 255, 255))
+            self.screen.blit(text, (screen_x + 26, screen_y - 10))
+
+        draw_speedometer(self.screen, self.total_speed * 1000)
+        draw_debug_info(self.screen, self.x, self.y, self.direction)
+
         pygame.display.flip()
-        clock.tick(FPS)
-        
-        
 
-    pygame.quit()
-    sys.exit(0)
+    def run(self):
+        self.running = True
+        while self.running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+
+            self.handle_input()
+            self.update()
+            # send state update
+            self.send_state()
+            self.draw()
+
+            self.clock.tick(FPS)
+
+
+def main():
+    # Run the Kart game using the refactored KartGame class
+    game = KartGame()
+    try:
+        game.run()
+    finally:
+        pygame.quit()
+        sys.exit(0)
 
 
 
