@@ -160,6 +160,13 @@ class NetworkManager:
                     self.peers[sender_id] = {"socket": client_sock, "ip": addr[0], "port": addr[1]}
                     self.ledgers[sender_id] = []
                     print(f"[NETWORK] ✅ Conexión TCP establecida con {sender_id}")
+                    # Enviar un HELLO de vuelta por si él no nos había añadido aún
+                    hello_back = {"action": "HELLO", "peerId": self.peer_id, "room_hash": self.room_hash}
+                    try:
+                        client_sock.sendall((json.dumps(hello_back) + "\n").encode('utf-8'))
+                    except Exception:
+                        pass
+                    
                     if self.on_peer_connected:
                         self.on_peer_connected(sender_id)
             return sender_id
@@ -172,11 +179,18 @@ class NetworkManager:
                 
         return sender_id
 
-    def connect_to_peer(self, ip, port):
+    def connect_to_peer(self, ip, port, other_peer_id=None):
         """Inicia una conexión TCP proactiva hacia otro peer."""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((ip, port))
+            
+            if other_peer_id and other_peer_id not in self.peers:
+                self.peers[other_peer_id] = {"socket": sock, "ip": ip, "port": port}
+                self.ledgers[other_peer_id] = []
+                print(f"[NETWORK] ✅ Conexión TCP saliente establecida con {other_peer_id}")
+                if self.on_peer_connected:
+                    self.on_peer_connected(other_peer_id)
             
             # Enviar mensaje de saludo inicial
             hello_msg = {
@@ -220,6 +234,6 @@ class NetworkManager:
                     # Si es alguien nuevo de mi misma sala, nos conectamos por TCP
                     if other_peer != self.peer_id and other_peer not in self.peers:
                         print(f"[NETWORK] 🔍 Encontrado peer de mi sala en LAN: {other_peer} ({addr[0]}:{other_port})")
-                        self.connect_to_peer(addr[0], other_port)
+                        self.connect_to_peer(addr[0], other_port, other_peer)
             except Exception:
                 pass

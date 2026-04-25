@@ -5,6 +5,7 @@ import subprocess
 import queue
 from ui import Button, TextInput
 from network import NetworkManager
+from game import Board
 
 # Configuración básica
 WIDTH, HEIGHT = 800, 600
@@ -57,6 +58,11 @@ def main():
     net_manager = None
     is_host = False
     msg_queue = queue.Queue()
+    
+    # Variables de Partida
+    my_board = None
+    has_committed_board = False
+    player_commits = {} # Aquí guardaremos los board_hash de los rivales
 
     def on_message_received(msg):
         msg_queue.put(msg)
@@ -140,18 +146,35 @@ def main():
                     # El host decide empezar
                     players_list = list(net_manager.peers.keys())
                     net_manager.send_event("START_GAME", players=players_list)
+                    
+                    my_board = Board(WIDTH//2 - (12 * 30)//2, HEIGHT//2 - (12 * 30)//2)
+                    has_committed_board = False
                     current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
-                # Eventos de la partida irían aquí
-                pass
+                if my_board:
+                    my_board.handle_event(event)
+                    
+                    # Si acabamos de colocar todos los barcos, hacemos COMMIT
+                    if my_board.is_ready and not has_committed_board:
+                        board_hash = my_board.get_board_hash()
+                        print(f"Enviando COMMIT_BOARD: {board_hash}")
+                        net_manager.send_event("COMMIT_BOARD", board_hash=board_hash)
+                        has_committed_board = True
 
         # Procesar mensajes de red entrantes
         while not msg_queue.empty():
             msg = msg_queue.get()
             if msg.get("action") == "START_GAME":
                 print(f"El Host ha iniciado la partida. Jugadores: {msg.get('players')}")
+                my_board = Board(WIDTH//2 - (12 * 30)//2, HEIGHT//2 - (12 * 30)//2)
+                has_committed_board = False
                 current_state = STATE_GAME
+            elif msg.get("action") == "COMMIT_BOARD":
+                peer_id = msg.get("peerId")
+                b_hash = msg.get("board_hash")
+                player_commits[peer_id] = b_hash
+                print(f"[JUEGO] El jugador {peer_id} ha fijado su flota.")
 
         # Lógica de dibujado
         if current_state == STATE_MENU:
@@ -224,8 +247,17 @@ def main():
 
         elif current_state == STATE_GAME:
             screen.fill((20, 20, 40))
-            label = font_title.render("PARTIDA EN CURSO...", True, WHITE)
-            screen.blit(label, (WIDTH//2 - label.get_width()//2, HEIGHT//2))
+            if my_board:
+                my_board.draw(screen, font_small)
+                
+                # Si nosotros ya hemos acabado, mostramos estado de los rivales
+                if my_board.is_ready:
+                    ready_count = len(player_commits) + 1 # +1 por nosotros
+                    total_players = len(net_manager.peers) + 1
+                    
+                    status_text = f"Jugadores listos: {ready_count} / {total_players}"
+                    status_lbl = font_normal.render(status_text, True, (200, 200, 200))
+                    screen.blit(status_lbl, (WIDTH//2 - status_lbl.get_width()//2, HEIGHT - 50))
             
         pygame.display.flip()
         clock.tick(FPS)
