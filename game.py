@@ -225,16 +225,13 @@ class Board:
             # Si el barco ya estaba hundido (por otro atacante), solo confirmar hit.
             return {"hit": already_hit, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
-        # Impacto en barco intacto
+# Impacto en barco intacto
         if cell == 1:
             self.grid[y][x] = 3
-            ship = self._ship_at(x, y)
-            sunk = False
-            sunk_cells = []
-            if ship and self._is_ship_sunk(ship):
-                sunk_cells = self._mark_ship_sunk(ship)
-                sunk = True
-            return {"hit": True, "sunk": sunk, "sunk_cells": sunk_cells, "eliminated": self.are_all_ships_sunk()}
+            # Nunca revelar las celdas del barco al atacante - info leak.
+            # El atacante sabrá que hundió cuando no reciba más impactos
+            # en celdas de ese barco (pero el servidor no tiene ese registro).
+            return {"hit": True, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
         return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
 
