@@ -62,17 +62,45 @@ class TextInput:
                 elif event.key == pygame.K_BACKSPACE:
                     self.text = self.text[:-1]
                 elif event.key == pygame.K_v and (pygame.key.get_mods() & pygame.KMOD_CTRL):
-                    # Pegar desde el portapapeles
-                    import subprocess
+                    print("Intentando pegar desde el portapapeles (Ctrl+V detectado)...")
+                    success = False
+                    
+                    # 1. Intentar con Tkinter (Nativo de Python y suele funcionar bien)
                     try:
-                        res = subprocess.run(['wl-paste'], capture_output=True, text=True, check=True)
-                        self.text += res.stdout.strip()
-                    except (FileNotFoundError, subprocess.CalledProcessError):
+                        import tkinter as tk
+                        root = tk.Tk()
+                        root.withdraw()
+                        pasted_text = root.clipboard_get()
+                        if pasted_text:
+                            self.text += pasted_text.strip()
+                            success = True
+                        root.destroy()
+                    except Exception as e:
+                        print(f"[DEBUG] Tkinter falló: {e}")
+                    
+                    # 2. Intentar con wl-paste (Wayland)
+                    if not success:
+                        import subprocess
+                        try:
+                            res = subprocess.run(['wl-paste'], capture_output=True, text=True, check=True)
+                            if res.stdout:
+                                self.text += res.stdout.strip()
+                                success = True
+                        except Exception as e:
+                            print(f"[DEBUG] wl-paste falló: {e}")
+                            
+                    # 3. Intentar con xclip (X11)
+                    if not success:
                         try:
                             res = subprocess.run(['xclip', '-selection', 'clipboard', '-o'], capture_output=True, text=True, check=True)
-                            self.text += res.stdout.strip()
-                        except (FileNotFoundError, subprocess.CalledProcessError):
-                            pass
+                            if res.stdout:
+                                self.text += res.stdout.strip()
+                                success = True
+                        except Exception as e:
+                            print(f"[DEBUG] xclip falló: {e}")
+                            
+                    if not success:
+                        print("❌ No se pudo pegar. Asegúrate de tener 'wl-clipboard' o 'xclip' instalado, o pega el texto a mano.")
                 else:
                     # Evitar caracteres raros si se presiona Ctrl
                     if not (pygame.key.get_mods() & pygame.KMOD_CTRL):
