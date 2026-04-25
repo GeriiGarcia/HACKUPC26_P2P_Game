@@ -107,22 +107,28 @@ def main():
 
     def save_my_inventory():
         """Guarda el inventario del jugador local a disco, cifrado con su clave pública RSA."""
-        if net_manager and room_hash_display and net_manager.peer_id in players:
+        if not net_manager or not room_hash_display:
+            return
+        room_key = room_hash_display
+        if room_key not in saved_inventories:
+            saved_inventories[room_key] = {}
+        
+        # Guardar MI inventario cifrado
+        if net_manager.peer_id in players:
             my_p = players[net_manager.peer_id]
-            room_key = room_hash_display
-            if room_key not in saved_inventories:
-                saved_inventories[room_key] = {}
-            
             inv_data = my_p.serialize_inventory()
-            # Cifrar con mi clave pública (solo yo con mi privada puedo leerlo)
             encrypted = net_manager.encrypt_for_me(inv_data)
             if encrypted:
                 saved_inventories[room_key][net_manager.peer_id] = {"encrypted": encrypted}
             else:
-                # Fallback sin cifrado
                 saved_inventories[room_key][net_manager.peer_id] = inv_data
-            save_all_inventories(saved_inventories)
-            print(f"[INVENTARIO] Guardado inventario de {net_manager.peer_id} (cifrado RSA)")
+        
+        # Guardar inventarios de OTROS jugadores en texto plano (para que al reconectar lo vean)
+        for pid, p in players.items():
+            if pid != net_manager.peer_id and p.inventory:
+                saved_inventories[room_key][pid] = p.serialize_inventory()
+        
+        save_all_inventories(saved_inventories)
 
     def restore_inventory(peer_id):
         """Restaura inventario guardado si existe, descifrando con clave privada."""
@@ -163,6 +169,14 @@ def main():
             if peer_id not in players:
                 players[peer_id] = Player()
                 restore_inventory(peer_id)
+
+    def on_peer_disconnected(peer_id):
+        """Callback cuando un peer se desconecta: guardar su inventario y quitarlo de pantalla."""
+        if peer_id in players:
+            # Guardar su inventario antes de quitarlo
+            save_my_inventory()
+            del players[peer_id]
+            print(f"[GAME] Jugador {peer_id} ha salido del juego")
 
     # Elementos UI - Menú Principal
     btn_create = Button(WIDTH//2 - 150, HEIGHT//2 - 50, 300, 50, "Crear una nueva sala", font_normal)
@@ -272,6 +286,7 @@ def main():
                         net_manager = NetworkManager(room_hash_display, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
                         net_manager.on_peer_connected = on_peer_connected
+                        net_manager.on_peer_disconnected = on_peer_disconnected
                         net_manager.start()
                         current_state = STATE_ROOM_CREATED
                 if btn_create_back.handle_event(event):
@@ -294,10 +309,12 @@ def main():
                     player_name = input_join_name.text.strip()
                     if room_hash and player_name:
                         print(f"Conectando a sala con Hash/Topic: {room_hash}")
+                        room_hash_display = room_hash  # Fijar el room_hash para el joiner
                         is_host = False
                         net_manager = NetworkManager(room_hash, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
                         net_manager.on_peer_connected = on_peer_connected
+                        net_manager.on_peer_disconnected = on_peer_disconnected
                         net_manager.start()
                         current_state = STATE_LOBBY
                 if btn_join_back.handle_event(event):

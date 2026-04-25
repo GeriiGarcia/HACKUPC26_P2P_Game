@@ -50,6 +50,7 @@ class NetworkManager:
         # Callbacks para la Interfaz Gráfica
         self.on_message_received = None
         self.on_peer_connected = None
+        self.on_peer_disconnected = None
         
         # --- RSA Keys (persistentes por nombre de jugador) ---
         self.public_key, self.private_key = self._load_or_create_keys()
@@ -200,6 +201,9 @@ class NetworkManager:
             stored_sock = self.peers[connected_peer_id].get("socket")
             if stored_sock is client_sock:
                 del self.peers[connected_peer_id]
+                print(f"[NETWORK] 🔌 Peer desconectado: {connected_peer_id}")
+                if self.on_peer_disconnected:
+                    self.on_peer_disconnected(connected_peer_id)
 
     def _process_incoming_message(self, msg, client_sock, addr):
         """Procesa un evento JSON entrante. Actualiza las réplicas del ledger."""

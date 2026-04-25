@@ -290,13 +290,16 @@ class Player:
         return False
 
     def serialize_inventory(self):
+        # JSON requiere claves string, convertimos int->str explícitamente
         return {
-            "inventory": self.inventory,
+            "inventory": {str(k): v for k, v in self.inventory.items()},
             "health": self.health,
             "hunger": self.hunger
         }
         
     def deserialize_inventory(self, data):
-        self.inventory = data.get("inventory", {})
+        # Convertir claves string de vuelta a int
+        raw_inv = data.get("inventory", {})
+        self.inventory = {int(k): v for k, v in raw_inv.items()}
         self.health = data.get("health", 10)
         self.hunger = data.get("hunger", 10)
