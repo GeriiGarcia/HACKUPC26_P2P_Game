@@ -202,6 +202,7 @@ class Game:
         
 
         self.goal_timer = 0
+        self.countdown_timer = 0
         
         self.net.start()
         
@@ -244,6 +245,7 @@ class Game:
             
             self.reset_positions()
             self.state = "PLAYING"
+            self.countdown_timer = 90 # 1.5s countdown
             print(f"Game started with {peer_id}. Host: {self.is_host}")
             
     def on_peer_disconnected(self, peer_id):
@@ -286,6 +288,17 @@ class Game:
                 for p in self.players.values():
                     p.score = 0
                 self.state = "PLAYING"
+                self.countdown_timer = 90
+        elif action == "GAME_OVER":
+            self.state = "GAME_OVER"
+            self.winner = msg.get("winner")
+        elif action == "GOAL":
+            # Sync score and trigger goal delay
+            scorer = msg.get("scorer")
+            if scorer in self.players:
+                self.players[scorer].score = msg.get("score")
+            self.goal_timer = 60 # 1 second post-goal physics
+            self.countdown_timer = 0 # Ensure no countdown during ball flight.
 
     def handle_inputs(self):
         keys = pygame.key.get_pressed()
@@ -391,6 +404,7 @@ class Game:
             self.goal_timer -= 1
             if self.goal_timer == 0:
                 self.reset_positions()
+                self.countdown_timer = 90
             return
 
         ground_y = HEIGHT - 100
@@ -466,11 +480,15 @@ class Game:
             
             if self.state == "PLAYING":
                 # Physics and Logic
-                if self.goal_timer == 0:
+                # Physics runs during normal gameplay or during the 1s post-goal flight
+                if self.countdown_timer == 0:
                     for p in self.players.values():
                         p.update()
                     self.ball.update()
                     self.resolve_collisions()
+                else:
+                    # During countdown, players are frozen
+                    self.countdown_timer -= 1
                     
                 self.check_goals()
                 
@@ -501,6 +519,11 @@ class Game:
                 for p in self.players.values():
                     p.draw(self.screen)
                 self.ball.draw(self.screen)
+                
+                if self.countdown_timer > 0:
+                    val = math.ceil(self.countdown_timer / 30)
+                    txt = self.big_font.render(str(val), True, YELLOW)
+                    self.screen.blit(txt, (WIDTH//2 - txt.get_width()//2, HEIGHT//2 - 50))
                 
                 if self.state == "GAME_OVER":
                     # Overlay
