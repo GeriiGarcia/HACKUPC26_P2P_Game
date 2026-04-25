@@ -79,9 +79,10 @@ def main():
     btn_join = Button(WIDTH//2 - 150, HEIGHT//2 + 20, 300, 50, "Unirse a una sala", font_normal)
 
     # Elementos UI - Crear Sala
-    input_create_room = TextInput(WIDTH//2 - 150, HEIGHT//2 - 50, 300, 40, font_normal)
-    btn_create_confirm = Button(WIDTH//2 + 10, HEIGHT//2 + 20, 140, 40, "Crear sala", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
-    btn_create_back = Button(WIDTH//2 - 150, HEIGHT//2 + 20, 140, 40, "Volver", font_normal)
+    input_create_name = TextInput(WIDTH//2 - 150, HEIGHT//2 - 120, 300, 40, font_normal)
+    input_create_room = TextInput(WIDTH//2 - 150, HEIGHT//2 - 30, 300, 40, font_normal)
+    btn_create_confirm = Button(WIDTH//2 + 10, HEIGHT//2 + 40, 140, 40, "Crear sala", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
+    btn_create_back = Button(WIDTH//2 - 150, HEIGHT//2 + 40, 140, 40, "Volver", font_normal)
     
     # Elementos UI - Sala Creada
     room_hash_display = ""
@@ -92,9 +93,10 @@ def main():
     btn_start_lobby = Button(WIDTH//2 - 150, HEIGHT - 100, 300, 40, "Empezar Partida", font_normal, bg_color=(50, 200, 50), hover_color=(50, 150, 50))
 
     # Elementos UI - Unirse a Sala
-    input_join_room = TextInput(WIDTH//2 - 200, HEIGHT//2 - 50, 400, 40, font_normal)
-    btn_join_confirm = Button(WIDTH//2 + 10, HEIGHT//2 + 20, 140, 40, "Unirse", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
-    btn_join_back = Button(WIDTH//2 - 150, HEIGHT//2 + 20, 140, 40, "Volver", font_normal)
+    input_join_name = TextInput(WIDTH//2 - 200, HEIGHT//2 - 120, 400, 40, font_normal)
+    input_join_room = TextInput(WIDTH//2 - 200, HEIGHT//2 - 30, 400, 40, font_normal)
+    btn_join_confirm = Button(WIDTH//2 + 10, HEIGHT//2 + 40, 140, 40, "Unirse", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
+    btn_join_back = Button(WIDTH//2 - 150, HEIGHT//2 + 40, 140, 40, "Volver", font_normal)
 
     running = True
     while running:
@@ -113,12 +115,15 @@ def main():
                     input_join_room.text = ""
             
             elif current_state == STATE_CREATE_ROOM:
+                input_create_name.handle_event(event)
                 input_create_room.handle_event(event)
                 if btn_create_confirm.handle_event(event):
-                    if input_create_room.text.strip():
-                        room_hash_display = generate_room_hash(input_create_room.text.strip())
+                    room_name = input_create_room.text.strip()
+                    player_name = input_create_name.text.strip()
+                    if room_name and player_name:
+                        room_hash_display = generate_room_hash(room_name)
                         is_host = True
-                        net_manager = NetworkManager(room_hash_display)
+                        net_manager = NetworkManager(room_hash_display, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
                         net_manager.start()
                         current_state = STATE_ROOM_CREATED
@@ -135,13 +140,15 @@ def main():
                     current_state = STATE_LOBBY
                     
             elif current_state == STATE_JOIN_ROOM:
+                input_join_name.handle_event(event)
                 input_join_room.handle_event(event)
                 if btn_join_confirm.handle_event(event):
                     room_hash = input_join_room.text.strip()
-                    if room_hash:
+                    player_name = input_join_name.text.strip()
+                    if room_hash and player_name:
                         print(f"Conectando a sala con Hash/Topic: {room_hash}")
                         is_host = False
-                        net_manager = NetworkManager(room_hash)
+                        net_manager = NetworkManager(room_hash, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
                         net_manager.start()
                         current_state = STATE_LOBBY
@@ -213,7 +220,13 @@ def main():
                         x = letters.index(coord[0])
                         y = int(coord[1:]) - 1
                         
-                        hit = (my_board.grid[y][x] == 1)
+                        hit = (my_board.grid[y][x] == 1 or my_board.grid[y][x] == 3)
+                        # Marcar en nuestro tablero
+                        if hit:
+                            my_board.grid[y][x] = 3
+                        else:
+                            my_board.grid[y][x] = 2
+                            
                         print(f"[JUEGO] Nos han disparado en {coord}. Tocado: {hit}")
                         net_manager.send_event("RESULT", target_peer=sender, coord=coord, hit=hit)
                         
@@ -238,12 +251,16 @@ def main():
             
         elif current_state == STATE_CREATE_ROOM:
             title = font_title.render("Crear Nueva Sala", True, BLACK)
-            screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//4))
+            screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//4 - 50))
             
-            label = font_normal.render("Introduce un nombre o semilla para la sala:", True, BLACK)
-            screen.blit(label, (WIDTH//2 - label.get_width()//2, HEIGHT//2 - 90))
+            lbl_name = font_normal.render("Tu nombre:", True, BLACK)
+            screen.blit(lbl_name, (WIDTH//2 - 150, HEIGHT//2 - 150))
+            input_create_name.draw(screen)
             
+            lbl_room = font_normal.render("Nombre / Semilla de sala:", True, BLACK)
+            screen.blit(lbl_room, (WIDTH//2 - 150, HEIGHT//2 - 60))
             input_create_room.draw(screen)
+            
             btn_create_confirm.draw(screen)
             btn_create_back.draw(screen)
             
@@ -266,12 +283,16 @@ def main():
             
         elif current_state == STATE_JOIN_ROOM:
             title = font_title.render("Unirse a la Sala", True, BLACK)
-            screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//4))
+            screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//4 - 50))
             
-            label = font_normal.render("Introduce el Hash / Semilla de la sala:", True, BLACK)
-            screen.blit(label, (WIDTH//2 - label.get_width()//2, HEIGHT//2 - 90))
+            lbl_name = font_normal.render("Tu nombre:", True, BLACK)
+            screen.blit(lbl_name, (WIDTH//2 - 200, HEIGHT//2 - 150))
+            input_join_name.draw(screen)
             
+            lbl_room = font_normal.render("Introduce el Hash / Semilla de la sala:", True, BLACK)
+            screen.blit(lbl_room, (WIDTH//2 - 200, HEIGHT//2 - 60))
             input_join_room.draw(screen)
+            
             btn_join_confirm.draw(screen)
             btn_join_back.draw(screen)
             
@@ -317,6 +338,11 @@ def main():
                             all_players_sorted = sorted(list(net_manager.peers.keys()) + [net_manager.peer_id])
                             current_turn_index = 0
                             
+                            # Escalar y mover mi tablero a la parte inferior
+                            my_board.cell_size = 15
+                            my_board.x_offset = WIDTH//2 - (12*15)//2
+                            my_board.y_offset = HEIGHT - (12*15) - 60
+                            
                             # Crear tableros de ataque
                             offset_x = 50
                             for p in net_manager.peers.keys():
@@ -329,8 +355,9 @@ def main():
                     ab.draw(screen, font_small)
                 
                 # 2. Pequeño tablero propio (defensa)
-                # Re-escalar o dibujarlo más pequeño si quisiéramos, por ahora lo dejamos oculto 
-                # o lo podríamos dibujar abajo en pequeño.
+                lbl_defense = font_small.render("Tu tablero de defensa:", True, WHITE)
+                screen.blit(lbl_defense, (my_board.x_offset, my_board.y_offset - 20))
+                my_board.draw(screen, font_small)
                 
                 # 3. Estado de Turno
                 is_my_turn = (all_players_sorted[current_turn_index] == net_manager.peer_id)

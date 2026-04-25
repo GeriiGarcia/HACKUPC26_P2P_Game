@@ -22,9 +22,10 @@ class Ship:
         self.vertical = False
 
 class Board:
-    def __init__(self, x_offset, y_offset):
+    def __init__(self, x_offset, y_offset, cell_size=CELL_SIZE):
         self.x_offset = x_offset
         self.y_offset = y_offset
+        self.cell_size = cell_size
         self.grid = [[0 for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
         self.ships = [
             Ship(4),
@@ -40,16 +41,23 @@ class Board:
         # Dibujar cuadricula
         for y in range(BOARD_SIZE):
             for x in range(BOARD_SIZE):
-                rect = pygame.Rect(self.x_offset + x * CELL_SIZE, self.y_offset + y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
-                pygame.draw.rect(screen, SEA_COLOR, rect)
+                rect = pygame.Rect(self.x_offset + x * self.cell_size, self.y_offset + y * self.cell_size, self.cell_size, self.cell_size)
+                
+                if self.grid[y][x] == 2:
+                    pygame.draw.rect(screen, (200, 200, 200), rect) # Agua
+                elif self.grid[y][x] == 3:
+                    pygame.draw.rect(screen, (255, 50, 50), rect) # Tocado
+                else:
+                    pygame.draw.rect(screen, SEA_COLOR, rect)
+                    
                 pygame.draw.rect(screen, GRID_COLOR, rect, 1)
 
         # Dibujar barcos ya colocados
         for ship in self.ships:
             if ship.placed:
-                width = CELL_SIZE if ship.vertical else CELL_SIZE * ship.size
-                height = CELL_SIZE * ship.size if ship.vertical else CELL_SIZE
-                rect = pygame.Rect(self.x_offset + ship.x * CELL_SIZE, self.y_offset + ship.y * CELL_SIZE, width, height)
+                width = self.cell_size if ship.vertical else self.cell_size * ship.size
+                height = self.cell_size * ship.size if ship.vertical else self.cell_size
+                rect = pygame.Rect(self.x_offset + ship.x * self.cell_size, self.y_offset + ship.y * self.cell_size, width, height)
                 pygame.draw.rect(screen, SHIP_COLOR, rect)
                 pygame.draw.rect(screen, (0, 0, 0), rect, 2)
 
@@ -57,17 +65,17 @@ class Board:
         if not self.is_ready:
             mouse_x, mouse_y = pygame.mouse.get_pos()
             if self._is_mouse_in_board(mouse_x, mouse_y):
-                grid_x = (mouse_x - self.x_offset) // CELL_SIZE
-                grid_y = (mouse_y - self.y_offset) // CELL_SIZE
+                grid_x = (mouse_x - self.x_offset) // self.cell_size
+                grid_y = (mouse_y - self.y_offset) // self.cell_size
                 
                 ship = self.ships[self.current_ship_index]
                 can_place = self._can_place_ship(ship.size, grid_x, grid_y, self.placing_vertical)
                 
                 color = SHIP_HOVER_COLOR if can_place else INVALID_COLOR
-                width = CELL_SIZE if self.placing_vertical else CELL_SIZE * ship.size
-                height = CELL_SIZE * ship.size if self.placing_vertical else CELL_SIZE
+                width = self.cell_size if self.placing_vertical else self.cell_size * ship.size
+                height = self.cell_size * ship.size if self.placing_vertical else self.cell_size
                 
-                rect = pygame.Rect(self.x_offset + grid_x * CELL_SIZE, self.y_offset + grid_y * CELL_SIZE, width, height)
+                rect = pygame.Rect(self.x_offset + grid_x * self.cell_size, self.y_offset + grid_y * self.cell_size, width, height)
                 pygame.draw.rect(screen, color, rect)
                 pygame.draw.rect(screen, (255, 255, 255), rect, 2)
             
@@ -88,8 +96,8 @@ class Board:
             elif event.button == 1: # Click izquierdo para colocar
                 mouse_x, mouse_y = event.pos
                 if self._is_mouse_in_board(mouse_x, mouse_y):
-                    grid_x = (mouse_x - self.x_offset) // CELL_SIZE
-                    grid_y = (mouse_y - self.y_offset) // CELL_SIZE
+                    grid_x = (mouse_x - self.x_offset) // self.cell_size
+                    grid_y = (mouse_y - self.y_offset) // self.cell_size
                     
                     ship = self.ships[self.current_ship_index]
                     if self._can_place_ship(ship.size, grid_x, grid_y, self.placing_vertical):
@@ -101,8 +109,8 @@ class Board:
                             print(f"[GAME] ¡Flota posicionada! Generando hash...")
 
     def _is_mouse_in_board(self, x, y):
-        return (self.x_offset <= x < self.x_offset + BOARD_SIZE * CELL_SIZE and 
-                self.y_offset <= y < self.y_offset + BOARD_SIZE * CELL_SIZE)
+        return (self.x_offset <= x < self.x_offset + BOARD_SIZE * self.cell_size and 
+                self.y_offset <= y < self.y_offset + BOARD_SIZE * self.cell_size)
 
     def _can_place_ship(self, size, x, y, vertical):
         if vertical:
