@@ -20,6 +20,7 @@ class Ship:
         self.x = -1
         self.y = -1
         self.vertical = False
+        self.sunk = False
 
 class Board:
     def __init__(self, x_offset, y_offset, cell_size=CELL_SIZE):
@@ -49,11 +50,14 @@ class Board:
                 elif cell == 3:
                     pygame.draw.rect(screen, (255, 165, 0), rect) # Tocado por 1 (Naranja)
                 elif cell >= 4:
-                    pygame.draw.rect(screen, (255, 50, 50), rect) # Tocado por 2+ (Rojo)
+                    pygame.draw.rect(screen, (190, 40, 40), rect) # Barco hundido
                 elif cell == 1:
                     pygame.draw.rect(screen, SHIP_COLOR, rect) # Barco intacto
                 else:
                     pygame.draw.rect(screen, SEA_COLOR, rect)
+
+                if cell >= 4:
+                    self._draw_thin_x(screen, rect)
                     
                 pygame.draw.rect(screen, GRID_COLOR, rect, 1)
 
@@ -105,6 +109,18 @@ class Board:
                             self.is_ready = True
                             print(f"[GAME] ¡Flota posicionada! Generando hash...")
 
+    def _draw_thin_x(self, screen, rect, color=(240, 240, 240)):
+        margin = max(1, self.cell_size // 6)
+        thickness = 1 if self.cell_size <= 18 else 2
+        pygame.draw.line(screen, color,
+                         (rect.left + margin, rect.top + margin),
+                         (rect.right - margin, rect.bottom - margin),
+                         thickness)
+        pygame.draw.line(screen, color,
+                         (rect.left + margin, rect.bottom - margin),
+                         (rect.right - margin, rect.top + margin),
+                         thickness)
+
     def _is_mouse_in_board(self, x, y):
         return (self.x_offset <= x < self.x_offset + BOARD_SIZE * self.cell_size and 
                 self.y_offset <= y < self.y_offset + BOARD_SIZE * self.cell_size)
@@ -140,11 +156,89 @@ class Board:
         data_to_hash = grid_str + self.salt
         return hashlib.sha256(data_to_hash.encode('utf-8')).hexdigest()
 
+    def _ship_cells(self, ship):
+        cells = []
+        if not ship.placed:
+            return cells
+        for i in range(ship.size):
+            x = ship.x
+            y = ship.y
+            if ship.vertical:
+                y += i
+            else:
+                x += i
+            cells.append((x, y))
+        return cells
+
+    def _ship_at(self, x, y):
+        for ship in self.ships:
+            if not ship.placed:
+                continue
+            if (x, y) in self._ship_cells(ship):
+                return ship
+        return None
+
+    def _is_ship_sunk(self, ship):
+        if not ship:
+            return False
+        for cx, cy in self._ship_cells(ship):
+            if self.grid[cy][cx] < 3:
+                return False
+        return True
+
+    def _mark_ship_sunk(self, ship):
+        sunk_cells = []
+        if not ship:
+            return sunk_cells
+        for cx, cy in self._ship_cells(ship):
+            if self.grid[cy][cx] >= 3:
+                self.grid[cy][cx] = 4
+                sunk_cells.append((cx, cy))
+        ship.sunk = True
+        return sunk_cells
+
+    def are_all_ships_sunk(self):
+        return all(getattr(ship, "sunk", False) for ship in self.ships)
+
+    def receive_shot(self, x, y):
+        """
+        Procesa un disparo entrante sobre el tablero propio.
+        Devuelve un dict con hit, sunk, sunk_cells y eliminated.
+        """
+        if not (0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE):
+            return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
+
+        cell = self.grid[y][x]
+
+        # Casilla de agua no descubierta
+        if cell == 0:
+            self.grid[y][x] = 2
+            return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
+
+        # Ya disparada (agua o barco dañado/hundido)
+        if cell in (2, 3, 4):
+            already_hit = cell in (3, 4)
+            return {"hit": already_hit, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
+
+        # Impacto en barco intacto
+        if cell == 1:
+            self.grid[y][x] = 3
+            ship = self._ship_at(x, y)
+            sunk = False
+            sunk_cells = []
+            if ship and self._is_ship_sunk(ship):
+                sunk_cells = self._mark_ship_sunk(ship)
+                sunk = True
+            return {"hit": True, "sunk": sunk, "sunk_cells": sunk_cells, "eliminated": self.are_all_ships_sunk()}
+
+        return {"hit": False, "sunk": False, "sunk_cells": [], "eliminated": self.are_all_ships_sunk()}
+
 # Estados para el tablero de ataque
 UNEXPLORED = 0
 SELECTED = 1
 WATER = 2
 HIT = 3
+SUNK = 4
 
 class AttackBoard:
     def __init__(self, target_peer_id, x_offset, y_offset, cell_size=25):
@@ -154,10 +248,33 @@ class AttackBoard:
         self.cell_size = cell_size
         self.grid = [[UNEXPLORED for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
         self.selected_coord = None # Tupla (x, y)
-        
+        self.is_eliminated = False
+
+    def _draw_thin_x(self, screen, rect, color=(245, 245, 245)):
+        margin = max(1, self.cell_size // 6)
+        thickness = 1 if self.cell_size <= 16 else 2
+        pygame.draw.line(screen, color,
+                         (rect.left + margin, rect.top + margin),
+                         (rect.right - margin, rect.bottom - margin),
+                         thickness)
+        pygame.draw.line(screen, color,
+                         (rect.left + margin, rect.bottom - margin),
+                         (rect.right - margin, rect.top + margin),
+                         thickness)
+
+    def clear_selection(self):
+        if self.selected_coord:
+            sx, sy = self.selected_coord
+            if 0 <= sx < BOARD_SIZE and 0 <= sy < BOARD_SIZE and self.grid[sy][sx] == SELECTED:
+                self.grid[sy][sx] = UNEXPLORED
+            self.selected_coord = None
+
     def draw(self, screen, font, is_their_turn=False):
-        color = (255, 255, 0) if is_their_turn else (255, 255, 255)
-        lbl = font.render(f"Rival: {self.target_peer_id}", True, color)
+        label = f"Rival: {self.target_peer_id}"
+        if self.is_eliminated:
+            label += " (ELIMINADO)"
+        color = (255, 120, 120) if self.is_eliminated else ((255, 255, 0) if is_their_turn else (255, 255, 255))
+        lbl = font.render(label, True, color)
         lbl_y = self.y_offset - font.get_height() - 4
         screen.blit(lbl, (self.x_offset, lbl_y))
         
@@ -173,11 +290,19 @@ class AttackBoard:
                     pygame.draw.rect(screen, (200, 200, 200), rect)
                 elif self.grid[y][x] == HIT:
                     pygame.draw.rect(screen, (255, 50, 50), rect)
+                elif self.grid[y][x] == SUNK:
+                    pygame.draw.rect(screen, (180, 30, 30), rect)
+                    self._draw_thin_x(screen, rect)
                     
                 pygame.draw.rect(screen, GRID_COLOR, rect, 1)
 
+        if self.is_eliminated:
+            overlay = pygame.Surface((BOARD_SIZE * self.cell_size, BOARD_SIZE * self.cell_size), pygame.SRCALPHA)
+            overlay.fill((20, 20, 20, 110))
+            screen.blit(overlay, (self.x_offset, self.y_offset))
+
     def handle_event(self, event, is_my_turn):
-        if not is_my_turn:
+        if not is_my_turn or self.is_eliminated:
             return False
             
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -189,8 +314,7 @@ class AttackBoard:
                 grid_y = (mouse_y - self.y_offset) // self.cell_size
                 
                 if self.grid[grid_y][grid_x] == UNEXPLORED or self.grid[grid_y][grid_x] == SELECTED:
-                    if self.selected_coord:
-                        self.grid[self.selected_coord[1]][self.selected_coord[0]] = UNEXPLORED
+                    self.clear_selection()
                     self.selected_coord = (grid_x, grid_y)
                     self.grid[grid_y][grid_x] = SELECTED
                     return True
@@ -202,10 +326,40 @@ class AttackBoard:
         x, y = self.selected_coord
         return f"{letters[x]}{y+1}"
         
-    def apply_result(self, coord_str, hit):
+    def apply_result(self, coord_str, hit, sunk=False):
         letters = "ABCDEFGHIJKL"
         x = letters.index(coord_str[0])
         y = int(coord_str[1:]) - 1
-        self.grid[y][x] = HIT if hit else WATER
+
+        if not (0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE):
+            return
+
+        current = self.grid[y][x]
+        if hit:
+            if sunk or current == SUNK:
+                self.grid[y][x] = SUNK
+            else:
+                self.grid[y][x] = HIT
+        else:
+            if current in (UNEXPLORED, SELECTED):
+                self.grid[y][x] = WATER
+
         if self.selected_coord == (x, y):
             self.selected_coord = None
+
+    def apply_sunk_cells(self, coord_list):
+        if not coord_list:
+            return
+        letters = "ABCDEFGHIJKL"
+        for coord_str in coord_list:
+            if not coord_str:
+                continue
+            try:
+                x = letters.index(coord_str[0])
+                y = int(coord_str[1:]) - 1
+            except (ValueError, IndexError):
+                continue
+            if 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE:
+                self.grid[y][x] = SUNK
+                if self.selected_coord == (x, y):
+                    self.selected_coord = None

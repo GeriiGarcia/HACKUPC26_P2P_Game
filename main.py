@@ -73,9 +73,123 @@ def main():
     btn_fire = Button(WIDTH//2 - 70, HEIGHT - 60, 140, 40, "¡Fuego!", font_normal, bg_color=(200, 50, 50), hover_color=(255, 100, 100))
     all_players_sorted = []
     current_turn_index = 0
+    eliminated_players = set()
+    elimination_order = []
+    game_over = False
+    final_ranking = []
+    winner_peer_id = None
 
     def on_message_received(msg):
         msg_queue.put(msg)
+
+    def idx_to_coord(ix, iy):
+        letters = "ABCDEFGHIJKL"
+        return f"{letters[ix]}{iy+1}"
+
+    def coord_to_idx(coord):
+        letters = "ABCDEFGHIJKL"
+        x = letters.index(coord[0])
+        y = int(coord[1:]) - 1
+        return x, y
+
+    def alive_players():
+        if not net_manager:
+            return []
+        all_players = sorted(list(net_manager.peers.keys()) + [net_manager.peer_id])
+        return [p for p in all_players if p not in eliminated_players]
+
+    def build_final_ranking():
+        alive = alive_players()
+        ordered = [p for p in elimination_order if p not in alive]
+        return list(reversed(alive)) + list(reversed(ordered))
+
+    def coord_list_from_cells(cells):
+        return [idx_to_coord(cx, cy) for (cx, cy) in cells]
+
+    def pos_label(pos):
+        return f"{pos}º"
+
+    def _first_alive_index():
+        for i, p in enumerate(all_players_sorted):
+            if p not in eliminated_players:
+                return i
+        return None
+
+    def ensure_current_turn_is_alive():
+        nonlocal current_turn_index
+        if not all_players_sorted:
+            return
+
+        if not (0 <= current_turn_index < len(all_players_sorted)):
+            idx = _first_alive_index()
+            if idx is not None:
+                current_turn_index = idx
+            return
+
+        current_player = all_players_sorted[current_turn_index]
+        if current_player not in eliminated_players:
+            return
+
+        n = len(all_players_sorted)
+        i = current_turn_index
+        for _ in range(n):
+            i = (i + 1) % n
+            if all_players_sorted[i] not in eliminated_players:
+                current_turn_index = i
+                return
+
+    def advance_turn_to_next_alive():
+        nonlocal current_turn_index
+        if not all_players_sorted:
+            return
+
+        if not (0 <= current_turn_index < len(all_players_sorted)):
+            idx = _first_alive_index()
+            if idx is not None:
+                current_turn_index = idx
+            return
+
+        n = len(all_players_sorted)
+        i = current_turn_index
+        for _ in range(n):
+            i = (i + 1) % n
+            if all_players_sorted[i] not in eliminated_players:
+                current_turn_index = i
+                return
+
+    def refresh_attack_boards_elimination_state():
+        for ab in attack_boards:
+            ab.is_eliminated = (ab.target_peer_id in eliminated_players)
+            if ab.is_eliminated:
+                ab.clear_selection()
+
+    def announce_elimination(peer_id, source="local"):
+        nonlocal game_over, final_ranking, winner_peer_id
+        if peer_id in eliminated_players:
+            return
+        eliminated_players.add(peer_id)
+        if peer_id not in elimination_order:
+            elimination_order.append(peer_id)
+
+        refresh_attack_boards_elimination_state()
+
+        # Si me eliminaron, limpiar todas mis selecciones para evitar disparos fantasmas
+        if net_manager and peer_id == net_manager.peer_id:
+            for ab in attack_boards:
+                ab.clear_selection()
+
+        alive = alive_players()
+        if len(alive) <= 1:
+            game_over = True
+            final_ranking = build_final_ranking()
+            winner_peer_id = final_ranking[0] if final_ranking else None
+        else:
+            ensure_current_turn_is_alive()
+
+        if source == "local" and net_manager:
+            net_manager.send_event("PLAYER_ELIMINATED", eliminated_peer=peer_id)
+            if game_over:
+                net_manager.send_event("GAME_OVER", winner_peer=winner_peer_id, ranking=final_ranking)
 
     # Elementos UI - Menú Principal
     btn_create = Button(WIDTH//2 - 150, HEIGHT//2 - 50, 300, 50, "Crear una nueva sala", font_normal)
@@ -377,7 +491,17 @@ def main():
                     net_manager.send_event("START_GAME", players=players_list)
                     
                     my_board = Board(WIDTH//2 - (12 * 30)//2, HEIGHT//2 - (12 * 30)//2)
+                    player_commits.clear()
                     has_committed_board = False
+                    battle_phase = False
+                    attack_boards.clear()
+                    eliminated_players.clear()
+                    elimination_order.clear()
+                    all_players_sorted.clear()
+                    current_turn_index = 0
+                    game_over = False
+                    final_ranking.clear()
+                    winner_peer_id = None
                     current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
@@ -391,20 +515,24 @@ def main():
                         has_committed_board = True
                         
                 elif battle_phase:
-                    is_my_turn = (all_players_sorted[current_turn_index] == net_manager.peer_id)
+                    ensure_current_turn_is_alive()
+                    turn_owner = all_players_sorted[current_turn_index] if all_players_sorted else None
+                    is_my_turn = (not game_over and turn_owner == net_manager.peer_id and net_manager.peer_id not in eliminated_players)
+
                     for ab in attack_boards:
                         ab.handle_event(event, is_my_turn)
                         
                     if is_my_turn and btn_fire.handle_event(event):
                         targets = []
                         for ab in attack_boards:
-                            if ab.selected_coord:
+                            if not ab.is_eliminated and ab.selected_coord:
                                 targets.append({"target_peer": ab.target_peer_id, "coord": ab.get_selected_coord_str()})
                                 
                         # Solo permitimos disparar si ha seleccionado en todos los rivales
-                        if len(targets) == len(attack_boards):
+                        active_attack_boards = [ab for ab in attack_boards if not ab.is_eliminated]
+                        if len(targets) == len(active_attack_boards) and len(active_attack_boards) > 0:
                             net_manager.send_event("FIRE_MULTI", targets=targets)
-                            current_turn_index = (current_turn_index + 1) % len(all_players_sorted)
+                            advance_turn_to_next_alive()
                             print("[JUEGO] Disparos enviados.")
 
         # Procesar mensajes de red entrantes
@@ -413,7 +541,17 @@ def main():
             if msg.get("action") == "START_GAME":
                 print(f"El Host ha iniciado la partida. Jugadores: {msg.get('players')}")
                 my_board = Board(WIDTH//2 - (12 * 30)//2, HEIGHT//2 - (12 * 30)//2)
+                player_commits.clear()
                 has_committed_board = False
+                battle_phase = False
+                attack_boards.clear()
+                eliminated_players.clear()
+                elimination_order.clear()
+                all_players_sorted.clear()
+                current_turn_index = 0
+                game_over = False
+                final_ranking.clear()
+                winner_peer_id = None
                 current_state = STATE_GAME
             elif msg.get("action") == "COMMIT_BOARD":
                 peer_id = msg.get("peerId")
@@ -422,42 +560,86 @@ def main():
                 print(f"[JUEGO] El jugador {peer_id} ha fijado su flota.")
                 
             elif msg.get("action") == "FIRE_MULTI":
-                targets = msg.get("targets")
+                targets = msg.get("targets") or []
                 sender = msg.get("peerId")
                 
-                if battle_phase:
-                    current_turn_index = (current_turn_index + 1) % len(all_players_sorted)
+                if battle_phase and not game_over and sender and sender not in eliminated_players:
+                    if sender in all_players_sorted:
+                        current_turn_index = all_players_sorted.index(sender)
+                    advance_turn_to_next_alive()
                 
                 for t in targets:
                     if t["target_peer"] == net_manager.peer_id:
                         coord = t["coord"]
-                        letters = "ABCDEFGHIJKL"
-                        x = letters.index(coord[0])
-                        y = int(coord[1:]) - 1
-                        
-                        hit = (my_board.grid[y][x] == 1 or my_board.grid[y][x] >= 3)
-                        # Marcar en nuestro tablero sumando impactos
-                        if my_board.grid[y][x] == 1:
-                            my_board.grid[y][x] = 3
-                        elif my_board.grid[y][x] >= 3:
-                            my_board.grid[y][x] += 1
-                        elif my_board.grid[y][x] == 0:
-                            my_board.grid[y][x] = 2
-                            
-                        print(f"[JUEGO] Nos han disparado en {coord}. Tocado: {hit}")
-                        net_manager.send_event("RESULT", target_peer=sender, coord=coord, hit=hit)
+                        try:
+                            x, y = coord_to_idx(coord)
+                        except Exception:
+                            continue
+
+                        shot_result = my_board.receive_shot(x, y)
+                        hit = shot_result.get("hit", False)
+                        sunk = shot_result.get("sunk", False)
+                        sunk_cells = shot_result.get("sunk_cells", [])
+                        eliminated_now = shot_result.get("eliminated", False)
+                        sunk_cells_coord = coord_list_from_cells(sunk_cells)
+
+                        info = "HUNDIDO" if sunk else ("Tocado" if hit else "Agua")
+                        print(f"[JUEGO] Nos han disparado en {coord}. Resultado: {info}")
+
+                        net_manager.send_event(
+                            "RESULT",
+                            target_peer=sender,
+                            coord=coord,
+                            hit=hit,
+                            sunk=sunk,
+                            sunk_cells=sunk_cells_coord,
+                            eliminated=eliminated_now,
+                            eliminated_peer=net_manager.peer_id if eliminated_now else None,
+                        )
+
+                        if eliminated_now:
+                            print(f"[JUEGO] {net_manager.peer_id} ha sido eliminado.")
+                            announce_elimination(net_manager.peer_id, source="local")
                         
             elif msg.get("action") == "RESULT":
                 target_peer = msg.get("target_peer")
                 coord = msg.get("coord")
                 hit = msg.get("hit")
                 sender = msg.get("peerId")
+                sunk = msg.get("sunk", False)
+                sunk_cells = msg.get("sunk_cells") or []
+                eliminated_flag = msg.get("eliminated", False)
+                eliminated_peer = msg.get("eliminated_peer") or sender
                 
                 if target_peer == net_manager.peer_id:
                     for ab in attack_boards:
                         if ab.target_peer_id == sender:
-                            ab.apply_result(coord, hit)
-                            print(f"[JUEGO] Resultado de ataque a {sender} en {coord}: {'Tocado' if hit else 'Agua'}")
+                            if coord:
+                                ab.apply_result(coord, hit, sunk=sunk)
+                            if sunk_cells:
+                                ab.apply_sunk_cells(sunk_cells)
+                            status_txt = "HUNDIDO" if sunk else ("Tocado" if hit else "Agua")
+                            print(f"[JUEGO] Resultado de ataque a {sender} en {coord}: {status_txt}")
+
+                if eliminated_flag and eliminated_peer:
+                    announce_elimination(eliminated_peer, source="remote")
+
+            elif msg.get("action") == "PLAYER_ELIMINATED":
+                eliminated_peer = msg.get("eliminated_peer") or msg.get("peerId")
+                if eliminated_peer:
+                    announce_elimination(eliminated_peer, source="remote")
+
+            elif msg.get("action") == "GAME_OVER":
+                winner_peer = msg.get("winner_peer")
+                ranking = msg.get("ranking") or []
+                if ranking:
+                    game_over = True
+                    final_ranking = ranking
+                    winner_peer_id = winner_peer or ranking[0]
+                elif winner_peer:
+                    game_over = True
+                    winner_peer_id = winner_peer
+                    final_ranking = build_final_ranking()
 
         # Lógica de dibujado
         if current_state == STATE_MENU:
@@ -578,13 +760,23 @@ def main():
             else:
                 # Dibujar fase de batalla con layout reactivo
                 layout = compute_battle_layout(WIDTH, HEIGHT, len(attack_boards))
+                ensure_current_turn_is_alive()
 
                 # 1. Estado de turno (arriba)
-                is_my_turn = (all_players_sorted[current_turn_index] == net_manager.peer_id)
-                turn_player = all_players_sorted[current_turn_index]
-                
-                turn_text = "¡Es tu turno!" if is_my_turn else f"Turno de {turn_player}..."
-                color = (50, 255, 50) if is_my_turn else (200, 200, 200)
+                turn_player = all_players_sorted[current_turn_index] if all_players_sorted else None
+                i_am_eliminated = (net_manager.peer_id in eliminated_players)
+                is_my_turn = (not game_over and not i_am_eliminated and turn_player == net_manager.peer_id)
+
+                if game_over:
+                    turn_text = f"🏆 Ganador: {winner_peer_id}" if winner_peer_id else "Partida terminada"
+                    color = (255, 215, 80)
+                elif i_am_eliminated:
+                    turn_text = "Has sido eliminado"
+                    color = (255, 120, 120)
+                else:
+                    turn_text = "¡Es tu turno!" if is_my_turn else f"Turno de {turn_player}..."
+                    color = (50, 255, 50) if is_my_turn else (200, 200, 200)
+
                 turn_lbl = font_title.render(turn_text, True, color)
                 screen.blit(turn_lbl, (WIDTH//2 - turn_lbl.get_width()//2, layout["turn_y"]))
 
@@ -593,14 +785,52 @@ def main():
                     ab.draw(screen, font_small, is_their_turn=(ab.target_peer_id == turn_player))
 
                 # 3. Tablero propio de defensa (abajo, sin solape)
-                my_lbl_color = (255, 255, 0) if is_my_turn else WHITE
+                my_lbl_color = (255, 120, 120) if i_am_eliminated else ((255, 255, 0) if is_my_turn else WHITE)
                 defense_label_y = my_board.y_offset - font_small.get_height() - 6
-                lbl_defense = font_small.render("Tu tablero de defensa:", True, my_lbl_color)
+                defense_label_txt = "Tu tablero de defensa" + (" (ELIMINADO)" if i_am_eliminated else ":")
+                lbl_defense = font_small.render(defense_label_txt, True, my_lbl_color)
                 screen.blit(lbl_defense, (my_board.x_offset, defense_label_y))
                 my_board.draw(screen, font_small, show_status_text=False)
                 
                 if is_my_turn:
                     btn_fire.draw(screen)
+
+                if game_over:
+                    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                    overlay.fill((10, 10, 20, 170))
+                    screen.blit(overlay, (0, 0))
+
+                    panel_w = min(560, max(360, WIDTH - 120))
+                    panel_h = min(420, max(260, HEIGHT - 120))
+                    panel_x = (WIDTH - panel_w) // 2
+                    panel_y = (HEIGHT - panel_h) // 2
+                    panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+                    pygame.draw.rect(screen, (30, 35, 55), panel_rect, border_radius=10)
+                    pygame.draw.rect(screen, (230, 230, 230), panel_rect, 2, border_radius=10)
+
+                    title = font_title.render("Fin de la partida", True, (255, 255, 255))
+                    screen.blit(title, (panel_x + panel_w // 2 - title.get_width() // 2, panel_y + 18))
+
+                    winner_text = f"Ganador: {winner_peer_id}" if winner_peer_id else "Ganador: (desconocido)"
+                    winner_lbl = font_normal.render(winner_text, True, (255, 215, 80))
+                    screen.blit(winner_lbl, (panel_x + panel_w // 2 - winner_lbl.get_width() // 2, panel_y + 86))
+
+                    ranking_title = font_normal.render("Clasificación final", True, (220, 220, 220))
+                    screen.blit(ranking_title, (panel_x + 30, panel_y + 136))
+
+                    ranking_lines = final_ranking if final_ranking else build_final_ranking()
+                    line_h = font_small.get_height() + 8
+                    start_y = panel_y + 176
+                    for i, player in enumerate(ranking_lines, start=1):
+                        is_me = (net_manager and player == net_manager.peer_id)
+                        c = (255, 255, 150) if is_me else (240, 240, 240)
+                        line = font_small.render(f"{pos_label(i)}  {player}" + ("  (vos)" if is_me else ""), True, c)
+                        screen.blit(line, (panel_x + 36, start_y + (i - 1) * line_h))
+
+                    if net_manager and net_manager.peer_id in ranking_lines:
+                        my_pos = ranking_lines.index(net_manager.peer_id) + 1
+                        pos_lbl = font_normal.render(f"Tu posición: {pos_label(my_pos)}", True, (180, 255, 180))
+                        screen.blit(pos_lbl, (panel_x + panel_w // 2 - pos_lbl.get_width() // 2, panel_y + panel_h - 54))
             
         pygame.display.flip()
         clock.tick(FPS)
