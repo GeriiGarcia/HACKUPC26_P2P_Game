@@ -2,7 +2,9 @@ import pygame
 import sys
 import hashlib
 import subprocess
+import queue
 from ui import Button, TextInput
+from network import NetworkManager
 
 # Configuración básica
 WIDTH, HEIGHT = 800, 600
@@ -21,6 +23,7 @@ STATE_CREATE_ROOM = 1
 STATE_JOIN_ROOM = 2
 STATE_ROOM_CREATED = 3
 STATE_GAME = 4
+STATE_LOBBY = 5
 
 def generate_room_hash(room_name):
     """Genera un hash SHA-256 a partir del nombre de la sala (Semilla)."""
@@ -51,6 +54,13 @@ def main():
 
     current_state = STATE_MENU
 
+    net_manager = None
+    is_host = False
+    msg_queue = queue.Queue()
+
+    def on_message_received(msg):
+        msg_queue.put(msg)
+
     # Elementos UI - Menú Principal
     btn_create = Button(WIDTH//2 - 150, HEIGHT//2 - 50, 300, 50, "Crear una nueva sala", font_normal)
     btn_join = Button(WIDTH//2 - 150, HEIGHT//2 + 20, 300, 50, "Unirse a una sala", font_normal)
@@ -63,7 +73,10 @@ def main():
     # Elementos UI - Sala Creada
     room_hash_display = ""
     btn_copy_hash = Button(WIDTH//2 - 150, HEIGHT//2 + 20, 300, 40, "Copiar Hash al Portapapeles", font_normal)
-    btn_start_game = Button(WIDTH//2 - 150, HEIGHT//2 + 80, 300, 40, "Ir al Juego", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
+    btn_goto_lobby = Button(WIDTH//2 - 150, HEIGHT//2 + 80, 300, 40, "Ir a la Sala de Espera", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
+
+    # Elementos UI - Lobby
+    btn_start_lobby = Button(WIDTH//2 - 150, HEIGHT - 100, 300, 40, "Empezar Partida", font_normal, bg_color=(50, 200, 50), hover_color=(50, 150, 50))
 
     # Elementos UI - Unirse a Sala
     input_join_room = TextInput(WIDTH//2 - 200, HEIGHT//2 - 50, 400, 40, font_normal)
@@ -91,6 +104,10 @@ def main():
                 if btn_create_confirm.handle_event(event):
                     if input_create_room.text.strip():
                         room_hash_display = generate_room_hash(input_create_room.text.strip())
+                        is_host = True
+                        net_manager = NetworkManager(room_hash_display)
+                        net_manager.on_message_received = on_message_received
+                        net_manager.start()
                         current_state = STATE_ROOM_CREATED
                 if btn_create_back.handle_event(event):
                     current_state = STATE_MENU
@@ -101,21 +118,40 @@ def main():
                         print(f"Hash copiado con éxito: {room_hash_display}")
                     else:
                         print("Error copiando: No se encontró wl-copy ni xclip en el sistema. Asegúrate de tener 'wl-clipboard' instalado.")
-                if btn_start_game.handle_event(event):
-                    current_state = STATE_GAME # Iniciar la partida
+                if btn_goto_lobby.handle_event(event):
+                    current_state = STATE_LOBBY
                     
             elif current_state == STATE_JOIN_ROOM:
                 input_join_room.handle_event(event)
                 if btn_join_confirm.handle_event(event):
-                    if input_join_room.text.strip():
-                        print(f"Conectando a sala con Hash/Topic: {input_join_room.text.strip()}")
-                        current_state = STATE_GAME
+                    room_hash = input_join_room.text.strip()
+                    if room_hash:
+                        print(f"Conectando a sala con Hash/Topic: {room_hash}")
+                        is_host = False
+                        net_manager = NetworkManager(room_hash)
+                        net_manager.on_message_received = on_message_received
+                        net_manager.start()
+                        current_state = STATE_LOBBY
                 if btn_join_back.handle_event(event):
                     current_state = STATE_MENU
+
+            elif current_state == STATE_LOBBY:
+                if is_host and btn_start_lobby.handle_event(event):
+                    # El host decide empezar
+                    players_list = list(net_manager.peers.keys())
+                    net_manager.send_event("START_GAME", players=players_list)
+                    current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
                 # Eventos de la partida irían aquí
                 pass
+
+        # Procesar mensajes de red entrantes
+        while not msg_queue.empty():
+            msg = msg_queue.get()
+            if msg.get("action") == "START_GAME":
+                print(f"El Host ha iniciado la partida. Jugadores: {msg.get('players')}")
+                current_state = STATE_GAME
 
         # Lógica de dibujado
         if current_state == STATE_MENU:
@@ -150,7 +186,7 @@ def main():
             screen.blit(hash_surf2, (WIDTH//2 - hash_surf2.get_width()//2, HEIGHT//2 - 20))
             
             btn_copy_hash.draw(screen)
-            btn_start_game.draw(screen)
+            btn_goto_lobby.draw(screen)
             
         elif current_state == STATE_JOIN_ROOM:
             title = font_title.render("Unirse a la Sala", True, BLACK)
@@ -163,6 +199,29 @@ def main():
             btn_join_confirm.draw(screen)
             btn_join_back.draw(screen)
             
+        elif current_state == STATE_LOBBY:
+            title = font_title.render("Sala de Espera", True, BLACK)
+            screen.blit(title, (WIDTH//2 - title.get_width()//2, 50))
+            
+            # Listar jugadores
+            y_offset = 150
+            
+            if net_manager:
+                you_lbl = font_normal.render(f"Tú: {net_manager.peer_id} " + ("(Host)" if is_host else ""), True, DARK_BLUE)
+                screen.blit(you_lbl, (WIDTH//2 - you_lbl.get_width()//2, y_offset))
+                y_offset += 40
+                
+                for peer_id in net_manager.peers:
+                    peer_lbl = font_normal.render(f"Jugador conectado: {peer_id}", True, BLACK)
+                    screen.blit(peer_lbl, (WIDTH//2 - peer_lbl.get_width()//2, y_offset))
+                    y_offset += 40
+                    
+            if is_host:
+                btn_start_lobby.draw(screen)
+            else:
+                wait_lbl = font_normal.render("Esperando a que el host inicie la partida...", True, (100, 100, 100))
+                screen.blit(wait_lbl, (WIDTH//2 - wait_lbl.get_width()//2, HEIGHT - 100))
+
         elif current_state == STATE_GAME:
             screen.fill((20, 20, 40))
             label = font_title.render("PARTIDA EN CURSO...", True, WHITE)
