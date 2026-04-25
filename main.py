@@ -623,7 +623,7 @@ def main():
                         except Exception:
                             continue
 
-                        shot_result = my_board.receive_shot(x, y)
+                        shot_result = my_board.receive_shot(x, y, attacker_id=sender)
                         hit = shot_result.get("hit", False)
                         sunk = shot_result.get("sunk", False)
                         sunk_cells = shot_result.get("sunk_cells", [])
