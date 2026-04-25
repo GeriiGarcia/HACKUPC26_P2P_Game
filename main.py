@@ -153,6 +153,9 @@ def main():
         b._game_key = key
         game_buttons.append(b)
 
+    # Map game_key -> display text for consistent labeling
+    game_label_map = {key: text for (text, key) in game_definitions}
+
     # Pagination controls for game list
     page_index = 0
     games_per_page = 4  # 2 columns x 2 rows
@@ -1208,7 +1211,9 @@ def main():
             screen.blit(title, (WIDTH//2 - title.get_width()//2, 50))
             # Show currently selected game (if any)
             if selected_game:
-                label_text = "Juego seleccionado: " + ("Battleship" if selected_game == 'battleship' else "Karting")
+                # Use the canonical display name if available
+                display_name = game_label_map.get(selected_game, selected_game)
+                label_text = "Juego seleccionado: " + display_name
                 lbl_sel = font_normal.render(label_text, True, DARK_BLUE)
                 screen.blit(lbl_sel, (WIDTH//2 - lbl_sel.get_width()//2, 100))
                 sel_hint = font_small.render("El host ha elegido este juego.", True, (80,80,80))
