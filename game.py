@@ -42,26 +42,20 @@ class Board:
         for y in range(BOARD_SIZE):
             for x in range(BOARD_SIZE):
                 rect = pygame.Rect(self.x_offset + x * self.cell_size, self.y_offset + y * self.cell_size, self.cell_size, self.cell_size)
-                
-                if self.grid[y][x] == 2:
+
+                cell = self.grid[y][x]
+                if cell == 2:
                     pygame.draw.rect(screen, (200, 200, 200), rect) # Agua
-                elif self.grid[y][x] == 3:
+                elif cell == 3:
                     pygame.draw.rect(screen, (255, 165, 0), rect) # Tocado por 1 (Naranja)
-                elif self.grid[y][x] >= 4:
+                elif cell >= 4:
                     pygame.draw.rect(screen, (255, 50, 50), rect) # Tocado por 2+ (Rojo)
+                elif cell == 1:
+                    pygame.draw.rect(screen, SHIP_COLOR, rect) # Barco intacto
                 else:
                     pygame.draw.rect(screen, SEA_COLOR, rect)
                     
                 pygame.draw.rect(screen, GRID_COLOR, rect, 1)
-
-        # Dibujar barcos ya colocados
-        for ship in self.ships:
-            if ship.placed:
-                width = self.cell_size if ship.vertical else self.cell_size * ship.size
-                height = self.cell_size * ship.size if ship.vertical else self.cell_size
-                rect = pygame.Rect(self.x_offset + ship.x * self.cell_size, self.y_offset + ship.y * self.cell_size, width, height)
-                pygame.draw.rect(screen, SHIP_COLOR, rect)
-                pygame.draw.rect(screen, (0, 0, 0), rect, 2)
 
         # Lógica de Hover (previsualización del barco) si no hemos terminado
         if not self.is_ready:
