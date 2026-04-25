@@ -3,7 +3,8 @@ import threading
 import json
 import time
 import uuid
-
+import rsa
+import base64
 # Puertos por defecto para el juego
 DEFAULT_PORT = 14200 
 DISCOVERY_PORT = 14201
@@ -42,6 +43,15 @@ class NetworkManager:
         # Callbacks para la Interfaz Gráfica
         self.on_message_received = None
         self.on_peer_connected = None
+        
+        # --- RSA Keys ---
+        try:
+            self.public_key, self.private_key = rsa.newkeys(512)
+        except Exception as e:
+            print(f"[NETWORK] Warning: RSA keys generation failed ({e}). Proceeding without encryption.")
+            self.public_key, self.private_key = None, None
+            
+        self.peer_public_keys = {} # peer_id -> rsa.PublicKey
         
         # --- UDP (Para el descubrimiento / Swarming Phase 1) ---
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -124,7 +134,7 @@ class NetworkManager:
         
         while self.running:
             try:
-                data = client_sock.recv(4096)
+                data = client_sock.recv(65536) # Buffer más grande para estados de mapa
                 if not data:
                     break # Se ha cerrado la conexión
                 
@@ -159,9 +169,22 @@ class NetworkManager:
                 if sender_id not in self.peers:
                     self.peers[sender_id] = {"socket": client_sock, "ip": addr[0], "port": addr[1]}
                     self.ledgers[sender_id] = []
+                    
+                    pk_pem = msg.get("public_key")
+                    if pk_pem:
+                        try:
+                            self.peer_public_keys[sender_id] = rsa.PublicKey.load_pkcs1(pk_pem.encode('utf-8'))
+                        except Exception as e:
+                            print(f"[NETWORK] Error procesando clave pública de {sender_id}: {e}")
+
                     print(f"[NETWORK] ✅ Conexión TCP establecida con {sender_id}")
                     # Enviar un HELLO de vuelta por si él no nos había añadido aún
-                    hello_back = {"action": "HELLO", "peerId": self.peer_id, "room_hash": self.room_hash}
+                    hello_back = {
+                        "action": "HELLO", 
+                        "peerId": self.peer_id, 
+                        "room_hash": self.room_hash,
+                        "public_key": self.public_key.save_pkcs1().decode('utf-8') if self.public_key else None
+                    }
                     try:
                         client_sock.sendall((json.dumps(hello_back) + "\n").encode('utf-8'))
                     except Exception:
@@ -196,7 +219,8 @@ class NetworkManager:
             hello_msg = {
                 "action": "HELLO", 
                 "peerId": self.peer_id, 
-                "room_hash": self.room_hash
+                "room_hash": self.room_hash,
+                "public_key": self.public_key.save_pkcs1().decode('utf-8') if self.public_key else None
             }
             sock.sendall((json.dumps(hello_msg) + "\n").encode('utf-8'))
             
@@ -237,3 +261,39 @@ class NetworkManager:
                         self.connect_to_peer(addr[0], other_port, other_peer)
             except Exception:
                 pass
+
+    def encrypt_for_peer(self, target_peer_id, dict_data):
+        """Encripta un diccionario usando la clave pública del rival"""
+        if target_peer_id not in self.peer_public_keys:
+            return None
+        try:
+            msg_bytes = json.dumps(dict_data).encode('utf-8')
+            encrypted = rsa.encrypt(msg_bytes, self.peer_public_keys[target_peer_id])
+            return base64.b64encode(encrypted).decode('utf-8')
+        except Exception as e:
+            print(f"[NETWORK] Error encrypting: {e}")
+            return None
+            
+    def encrypt_for_me(self, dict_data):
+        """Encripta un diccionario usando la propia clave pública"""
+        if not self.public_key:
+            return None
+        try:
+            msg_bytes = json.dumps(dict_data).encode('utf-8')
+            encrypted = rsa.encrypt(msg_bytes, self.public_key)
+            return base64.b64encode(encrypted).decode('utf-8')
+        except Exception as e:
+            print(f"[NETWORK] Error encrypting: {e}")
+            return None
+
+    def decrypt_for_me(self, b64_encrypted_str):
+        """Desencripta con mi clave privada"""
+        if not self.private_key:
+            return None
+        try:
+            encrypted = base64.b64decode(b64_encrypted_str.encode('utf-8'))
+            msg_bytes = rsa.decrypt(encrypted, self.private_key)
+            return json.loads(msg_bytes.decode('utf-8'))
+        except Exception as e:
+            print(f"[NETWORK] Error decrypting: {e}")
+            return None
