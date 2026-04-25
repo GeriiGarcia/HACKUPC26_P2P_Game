@@ -148,10 +148,7 @@ class SynthFallbackOutput:
         self.note_channels.clear()
 
 
-def build_key_layout():
-    base_x = 80
-    y = 70
-
+def build_key_layout(base_x=80, y=70, white_key_w=WHITE_KEY_W, white_key_h=WHITE_KEY_H, black_key_w=BLACK_KEY_W, black_key_h=BLACK_KEY_H):
     note_range = range(NOTE_MIN, NOTE_MAX + 1)
 
     white_keys = []
@@ -159,7 +156,7 @@ def build_key_layout():
     white_i = 0
     for note in note_range:
         if note % 12 in WHITE_PCS:
-            rect = pygame.Rect(base_x + white_i * WHITE_KEY_W, y, WHITE_KEY_W, WHITE_KEY_H)
+            rect = pygame.Rect(base_x + white_i * white_key_w, y, white_key_w, white_key_h)
             white_keys.append({"note": note, "rect": rect})
             white_index_by_note[note] = white_i
             white_i += 1
@@ -174,10 +171,10 @@ def build_key_layout():
             continue
 
         rect = pygame.Rect(
-            base_x + (white_index_by_note[left_white] + 1) * WHITE_KEY_W - BLACK_KEY_W // 2,
+            base_x + (white_index_by_note[left_white] + 1) * white_key_w - black_key_w // 2,
             y,
-            BLACK_KEY_W,
-            BLACK_KEY_H,
+            black_key_w,
+            black_key_h,
         )
         black_keys.append({"note": note, "rect": rect})
 
@@ -750,6 +747,187 @@ def main(topic=None, node_cmd="node", embedded=False):
     pygame.midi.quit()
     if not embedded:
         pygame.quit()
+
+
+class PianoGame:
+    """Piano game integrated with the main app's NetworkManager (UDP broadcast + TCP)."""
+
+    def __init__(self, net_manager):
+        self.net_manager = net_manager
+
+        # Audio setup
+        self._init_audio()
+
+        # Keyboard layout (rebuilt on resize via build_layout)
+        self.white_keys = []
+        self.black_keys = []
+
+        # State
+        self.pressed_local = set()
+        self.active_counts = {}  # note -> active note_on count (local + remote)
+        self.remote_highlights = {}  # note -> expiry timestamp ms
+        self.mouse_active_note = None
+
+    def _init_audio(self):
+        try:
+            pygame.midi.init()
+        except Exception:
+            pass
+
+        self.audio_out = None
+        try:
+            default_id = pygame.midi.get_default_output_id()
+            if default_id == -1:
+                raise RuntimeError("No MIDI output device available")
+            self.audio_out = pygame.midi.Output(default_id)
+            self.audio_out.set_instrument(0)  # Acoustic Grand Piano
+        except Exception:
+            try:
+                self.audio_out = SynthFallbackOutput()
+            except Exception:
+                self.audio_out = SilentAudioOutput()
+
+    def build_layout(self, width, height):
+        """Rebuild keyboard layout adapted to window dimensions."""
+        num_white = sum(1 for n in range(NOTE_MIN, NOTE_MAX + 1) if n % 12 in WHITE_PCS)
+        max_white_w = min(WHITE_KEY_W, (width - 160) // max(1, num_white))
+        white_w = max(40, max_white_w)
+        white_h = min(WHITE_KEY_H, int((height - 100) * 0.7))
+        black_w = int(white_w * 0.6)
+        black_h = int(white_h * 0.64)
+
+        base_x = max(20, (width - num_white * white_w) // 2)
+        y = height - white_h - 30
+
+        self.white_keys, self.black_keys = build_key_layout(
+            base_x=base_x, y=y,
+            white_key_w=white_w, white_key_h=white_h,
+            black_key_w=black_w, black_key_h=black_h,
+        )
+
+    def handle_event(self, event):
+        """Handle pygame events (keyboard, mouse) for the piano."""
+        if event.type == pygame.KEYDOWN:
+            note = KEYBOARD_NOTE_MAP.get(event.key)
+            if note is not None and note not in self.pressed_local:
+                self.pressed_local.add(note)
+                self._play_note(note)
+                if self.net_manager:
+                    self.net_manager.send_event("NOTE_ON", note=note)
+
+        elif event.type == pygame.KEYUP:
+            note = KEYBOARD_NOTE_MAP.get(event.key)
+            if note is not None and note in self.pressed_local:
+                self.pressed_local.discard(note)
+                self._stop_note(note)
+                if self.net_manager:
+                    self.net_manager.send_event("NOTE_OFF", note=note)
+
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            note = get_note_from_mouse(event.pos, self.white_keys, self.black_keys)
+            if note is not None and note not in self.pressed_local:
+                self.pressed_local.add(note)
+                self.mouse_active_note = note
+                self._play_note(note)
+                if self.net_manager:
+                    self.net_manager.send_event("NOTE_ON", note=note)
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.mouse_active_note is not None and self.mouse_active_note in self.pressed_local:
+                self.pressed_local.discard(self.mouse_active_note)
+                self._stop_note(self.mouse_active_note)
+                if self.net_manager:
+                    self.net_manager.send_event("NOTE_OFF", note=self.mouse_active_note)
+            self.mouse_active_note = None
+
+    def on_network_message(self, msg):
+        """Handle a network message from NetworkManager."""
+        action = msg.get("action")
+        note = msg.get("note")
+        if not isinstance(note, int):
+            return
+
+        if action == "NOTE_ON":
+            self._play_note(note)
+            self.remote_highlights[note] = pygame.time.get_ticks() + HIGHLIGHT_MS
+        elif action == "NOTE_OFF":
+            self._stop_note(note)
+
+    def _play_note(self, note):
+        count = self.active_counts.get(note, 0)
+        if count == 0 and self.audio_out:
+            self.audio_out.note_on(note, 110)
+        self.active_counts[note] = count + 1
+
+    def _stop_note(self, note):
+        count = self.active_counts.get(note, 0)
+        if count <= 1:
+            self.active_counts.pop(note, None)
+            if self.audio_out:
+                self.audio_out.note_off(note, 0)
+        else:
+            self.active_counts[note] = count - 1
+
+    def draw(self, screen, font_small, font_normal, font_title, width, height):
+        """Draw the piano keyboard on the screen."""
+        screen.fill((24, 24, 28))
+        now_ms = pygame.time.get_ticks()
+
+        # White keys
+        for key in self.white_keys:
+            note = key["note"]
+            rect = key["rect"]
+            color = (245, 245, 245)
+            if note in self.pressed_local:
+                color = (130, 210, 255)
+            elif note in self.remote_highlights and self.remote_highlights[note] > now_ms:
+                color = (255, 200, 120)
+            pygame.draw.rect(screen, color, rect)
+            pygame.draw.rect(screen, (30, 30, 30), rect, 2)
+
+        # Black keys
+        for key in self.black_keys:
+            note = key["note"]
+            rect = key["rect"]
+            color = (22, 22, 22)
+            if note in self.pressed_local:
+                color = (70, 150, 210)
+            elif note in self.remote_highlights and self.remote_highlights[note] > now_ms:
+                color = (210, 120, 50)
+            pygame.draw.rect(screen, color, rect)
+            pygame.draw.rect(screen, (8, 8, 8), rect, 2)
+
+        # Clean expired highlights
+        expired = [n for n, until in self.remote_highlights.items() if until <= now_ms]
+        for n in expired:
+            self.remote_highlights.pop(n, None)
+
+        # Info text
+        tip = font_normal.render(
+            "Keyboard: A W S E D F T G Y H U J K O L P ; ' (C4..F5)",
+            True, (220, 220, 220),
+        )
+        screen.blit(tip, (80, 20))
+
+        status = font_normal.render("P2P Piano — Room Active", True, (180, 210, 180))
+        screen.blit(status, (80, 44))
+
+        # ESC hint
+        esc_hint = font_small.render("Press ESC to return to lobby", True, (150, 150, 150))
+        screen.blit(esc_hint, (width - esc_hint.get_width() - 20, 20))
+
+    def cleanup(self):
+        """Release audio and reset state."""
+        if self.audio_out:
+            try:
+                self.audio_out.close()
+            except Exception:
+                pass
+            self.audio_out = None
+        self.pressed_local.clear()
+        self.active_counts.clear()
+        self.remote_highlights.clear()
+        self.mouse_active_note = None
 
 
 if __name__ == "__main__":

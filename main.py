@@ -19,6 +19,11 @@ try:
 except Exception:
     KartGame = None
 
+try:
+    from piano import PianoGame
+except Exception:
+    PianoGame = None
+
 
 def main():
     # All previous top-level code should be inside this main function.
@@ -96,10 +101,11 @@ def main():
             return False
 
     # Minimal placeholders for objects that other code expects to exist.
-    global net_manager, msg_queue, battleship_game
+    global net_manager, msg_queue, battleship_game, piano_game
     net_manager = None
     msg_queue = queue.Queue()
     battleship_game = None
+    piano_game = None
 
     # Chat state for lobby
     chat_messages = []  # list of (peer_id, text)
@@ -133,7 +139,7 @@ def main():
     game_definitions = [
         ("Battleships", "battleship"),
         ("Karting", "karting"),
-        ("Game 3", "game3"),
+        ("Piano", "piano"),
         ("Game 4", "game4"),
         ("Game 5", "game5"),
         ("Game 6", "game6"),
@@ -277,7 +283,7 @@ def main():
                     net_manager = None
 
     def reset_match_state():
-        global battleship_game
+        global battleship_game, piano_game
         # discard any active Battleship manager and reset
         if battleship_game:
             try:
@@ -286,9 +292,15 @@ def main():
             except Exception:
                 pass
         battleship_game = None
+        if piano_game:
+            try:
+                piano_game.cleanup()
+            except Exception:
+                pass
+        piano_game = None
 
     def return_to_main_menu():
-        global current_state, net_manager, is_host
+        global current_state, net_manager, is_host, battleship_game, piano_game
         if net_manager:
             net_manager.stop()
         net_manager = None
@@ -296,6 +308,12 @@ def main():
         # clear any active battleship manager
         global battleship_game
         battleship_game = None
+        if piano_game:
+            try:
+                piano_game.cleanup()
+            except Exception:
+                pass
+        piano_game = None
 
         while not msg_queue.empty():
             try:
@@ -713,13 +731,13 @@ def main():
                 # Bottom: start selected game
                 if btn_start_game.handle_event(event):
                     if selected_game is None:
-                        print("Select a game first (Battleship or Karting)")
+                        print("Select a game first (Battleship, Karting or Piano)")
                     elif selected_game == 'battleship':
                         # host starts battleship
                         if net_manager:
                             try:
                                 players_list = list(net_manager.peers.keys())
-                                net_manager.send_event("START_GAME", players=players_list)
+                                net_manager.send_event("START_GAME", players=players_list, game="battleship")
                             except Exception:
                                 pass
                         # initialize Battleship manager and start placement
@@ -744,6 +762,19 @@ def main():
                                     current_state = STATE_MENU
                             except Exception as e:
                                 print("Failed to start KartGame:", e)
+                    elif selected_game == 'piano':
+                        if PianoGame is None:
+                            print("PianoGame not available (failed to import piano module).")
+                        else:
+                            if net_manager:
+                                try:
+                                    players_list = list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game="piano")
+                                except Exception:
+                                    pass
+                            piano_game = PianoGame(net_manager)
+                            piano_game.build_layout(WIDTH, HEIGHT)
+                            current_state = STATE_GAME
                     
             elif current_state == STATE_JOIN_ROOM:
                 input_join_name.handle_event(event)
@@ -798,15 +829,27 @@ def main():
                 if is_host and btn_start_lobby.handle_event(event):
                     # El host decide empezar
                     players_list = list(net_manager.peers.keys())
-                    net_manager.send_event("START_GAME", players=players_list)
-                    # initialize Battleship manager and start placement
-                    battleship_game = BattleshipGame(net_manager)
-                    battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    net_manager.send_event("START_GAME", players=players_list, game=selected_game or 'battleship')
+                    if selected_game == 'piano':
+                        piano_game = PianoGame(net_manager)
+                        piano_game.build_layout(WIDTH, HEIGHT)
+                    else:
+                        # initialize Battleship manager and start placement
+                        battleship_game = BattleshipGame(net_manager)
+                        battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
                     current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
+                # Piano game: handle events (ESC to return)
+                if piano_game:
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                        piano_game.cleanup()
+                        piano_game = None
+                        current_state = STATE_ROOM_CREATED if is_host else STATE_LOBBY
+                    else:
+                        piano_game.handle_event(event)
                 # Delegate event handling to BattleshipGame if present
-                if battleship_game:
+                elif battleship_game:
                     battleship_game.handle_event(event)
                     # if battle_phase and it's our turn and we pressed fire button, send FIRE_MULTI
                     if battleship_game.battle_phase:
@@ -848,13 +891,25 @@ def main():
                 except Exception:
                     pass
                 # continue to other handlers below where appropriate
+            # If a Piano game is active, delegate note events to it
+            if piano_game and action in ('NOTE_ON', 'NOTE_OFF'):
+                try:
+                    piano_game.on_network_message(msg)
+                except Exception:
+                    pass
             # fallback inline handling (kept for compatibility if battleship_game not created)
             if msg.get("action") == "START_GAME":
                 print(f"El Host ha iniciado la partida. Jugadores: {msg.get('players')}")
-                # create Battleship manager if not already
-                if not battleship_game:
-                    battleship_game = BattleshipGame(net_manager)
-                    battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                game_type = msg.get('game') or selected_game or 'battleship'
+                if game_type == 'piano':
+                    if not piano_game:
+                        piano_game = PianoGame(net_manager)
+                        piano_game.build_layout(WIDTH, HEIGHT)
+                else:
+                    # create Battleship manager if not already
+                    if not battleship_game:
+                        battleship_game = BattleshipGame(net_manager)
+                        battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
                 current_state = STATE_GAME
             elif msg.get("action") == "COMMIT_BOARD":
                 peer_id = msg.get("peerId")
@@ -864,7 +919,7 @@ def main():
             elif msg.get("action") == "GAME_SELECT":
                 # Host announced the selected game for this room
                 g = msg.get('game')
-                if g in ('battleship', 'karting'):
+                if g in ('battleship', 'karting', 'piano'):
                     selected_game = g
                     print(f"[LOBBY] Juego seleccionado: {selected_game}")
                 
@@ -1132,7 +1187,7 @@ def main():
             screen.blit(title, (WIDTH//2 - title.get_width()//2, 50))
             # Show currently selected game (if any)
             if selected_game:
-                label_text = "Juego seleccionado: " + ("Battleship" if selected_game == 'battleship' else "Karting")
+                label_text = "Juego seleccionado: " + {"battleship": "Battleship", "karting": "Karting", "piano": "Piano"}.get(selected_game, selected_game or "Ninguno")
                 lbl_sel = font_normal.render(label_text, True, DARK_BLUE)
                 screen.blit(lbl_sel, (WIDTH//2 - lbl_sel.get_width()//2, 100))
                 sel_hint = font_small.render("El host ha elegido este juego.", True, (80,80,80))
@@ -1210,9 +1265,12 @@ def main():
                     chat_input.text = ""
 
         elif current_state == STATE_GAME:
-            screen.fill((20, 20, 40))
+            # If we have a PianoGame, delegate drawing to it
+            if piano_game:
+                piano_game.build_layout(WIDTH, HEIGHT)
+                piano_game.draw(screen, font_small, font_normal, font_title, WIDTH, HEIGHT)
             # If we have a BattleshipGame manager, delegate drawing to it
-            if battleship_game:
+            elif battleship_game:
                 try:
                     battleship_game.draw(screen, font_small, font_normal, font_title, WIDTH, HEIGHT)
                 except Exception:
