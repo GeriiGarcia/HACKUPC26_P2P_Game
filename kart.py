@@ -13,11 +13,11 @@ FPS = 60
 ASSETS_DIR = "assets/Kart/"
 
 # Game constants 
-acceleration = 1.02
+acceleration = 1.04
 turning_deceleration = 0.99
 no_gas_deceleration = 0.98
 break_deceleration = 0.95
-max_speed = 0.075
+max_speed = 0.1
 max_back_speed = -0.03
 min_speed = 0.0001
 min_start_speed = 0.01
