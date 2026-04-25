@@ -40,8 +40,8 @@ def _load_track_from_json():
     candidates = []
     mapes_dir = os.path.join(ASSETS_DIR, 'mapes')
     if os.path.isdir(mapes_dir):
-        # prefer common filenames
-        for name in ('track.json', 'track_1.json', 'track1.json', 'map.json'):
+        # prefer the new filename `track2.json`, then common variants
+        for name in ('track2.json', 'track_2.json', 'track.json', 'map.json'):
             candidates.append(os.path.join(mapes_dir, name))
         # also include any other .json in the folder
         for fname in os.listdir(mapes_dir):
@@ -110,13 +110,40 @@ class KartGame:
         self.clock = pygame.time.Clock()
 
         # Load assets
-        self.tile_green = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/green.png").convert()
-        self.tile_gray = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/gray.png").convert()
-        self.tile_yellow = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/yellow.png").convert()
-        self.tile_blue = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/blue.png").convert()
-        self.tile_checkpoint = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/gray.png").convert()
-        self.tile_finish_line = pygame.image.load(ASSETS_DIR + "imatges/tilemap1/blue.png").convert()
-
+        self.tile_dot1 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/dot1.png").convert()
+        self.tile_dot2 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/dot2.png").convert()
+        self.tile_dot3 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/dot3.png").convert()
+        self.tile_dot4 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/dot4.png").convert()
+        self.tile_grass = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/grass.png").convert()
+        self.tile_interrogant23 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/interrogant23.png").convert()
+        self.tile_kerb1 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/kerb1.png").convert()
+        self.tile_kerb2 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/kerb2.png").convert()
+        self.tile_kerb3 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/kerb3.png").convert()
+        self.tile_kerb4 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/kerb4.png").convert()
+        self.tile_meta = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/meta.png").convert()
+        self.tile_checkpoint = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_middle.png").convert()
+        # Load player sprites with alpha so transparency is preserved
+        self.tile_P1 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/P1.png").convert_alpha()
+        self.tile_P2 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/P2.png").convert_alpha()
+        self.tile_P3 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/P3.png").convert_alpha()
+        # Player sprite registry
+        self.player_images = {
+            'P1': self.tile_P1,
+            'P2': self.tile_P2,
+            'P3': self.tile_P3,
+        }
+        self.tile_road_down = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_down.png").convert()
+        self.tile_road_left = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_left.png").convert()
+        self.tile_road_right = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_right.png").convert()
+        self.tile_road_top = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_top.png").convert()
+        self.tile_road_bottom_right = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_bottom_tight.png").convert() # File is named "tight" but it's actually the inner corner tile
+        self.tile_road_right_top = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_right_top.png").convert() 
+        self.tile_road_top_left = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_top_left.png").convert() 
+        self.tile_road_left_bottom = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_left_bottom.png").convert()  
+        self.tile_wall = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/wall.png").convert()
+        self.tile_road_middle = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/road_middle.png").convert()
+        
+        
         # Player state
         self.player = Player(peer_id=(self.net.peer_id if self.net else 'local'))
         # Spawn at tile (8,8) in the tilemap. Convert tile indices to world coordinates by adding map offset.
@@ -126,6 +153,12 @@ class KartGame:
         self.player.speed = 0.001
         self.checkpoint_counter = 0
         self.last_tile = 0
+
+        # Car assignment: local uses P1 by default; peers get unique cars from available pool
+        self.local_car = 'P1'
+        self.available_cars = ['P1', 'P2', 'P3']
+        self.peer_car_map = {}
+        self.used_cars = set([self.local_car])
 
         # Opponents state: peer_id -> dict with received target and rendered positions
         # Each entry will contain: x_target, y_target, direction_target, speed, render_x, render_y, last_seen, eliminated
@@ -148,17 +181,23 @@ class KartGame:
                         p = self.opponents.get(peer)
                         if p is None:
                             # first time, set rendered positions to target immediately
-                            self.opponents[peer] = {
-                                'x_target': tx,
-                                'y_target': ty,
-                                'direction_target': td,
-                                'speed': spd,
-                                'render_x': tx,
-                                'render_y': ty,
-                                'render_direction': td,
-                                'last_seen': now_t,
-                                'eliminated': False
-                            }
+                                self.opponents[peer] = {
+                                    'x_target': tx,
+                                    'y_target': ty,
+                                    'direction_target': td,
+                                    'speed': spd,
+                                    'render_x': tx,
+                                    'render_y': ty,
+                                    'render_direction': td,
+                                    'last_seen': now_t,
+                                    'eliminated': False
+                                }
+                                # assign a car sprite for this peer
+                                try:
+                                    car = self._assign_car_to_peer(peer)
+                                    self.opponents[peer]['car'] = car
+                                except Exception:
+                                    self.opponents[peer]['car'] = 'P2'
                         else:
                             p['x_target'] = tx
                             p['y_target'] = ty
@@ -237,6 +276,12 @@ class KartGame:
         now = time.time()
         for p in list(self.opponents.keys()):
             if now - self.opponents[p].get('last_seen', 0) > 10:
+                # free up car assignment if present
+                car = self.opponents[p].get('car')
+                if car and car in self.used_cars:
+                    self.used_cars.discard(car)
+                if p in self.peer_car_map:
+                    del self.peer_car_map[p]
                 del self.opponents[p]
 
         # Smooth remote players toward their last received target (no extrapolation)
@@ -271,33 +316,88 @@ class KartGame:
                     self.height//2 + int((row + track_1_offset[1] - self.player.y) * tile_size)
                 )
                 if tile_type == 0:
-                    self.screen.blit(self.tile_green, pos)
+                    self.screen.blit(self.tile_grass, pos)
                 elif tile_type == 1:
-                    self.screen.blit(self.tile_gray, pos)
+                    self.screen.blit(self.tile_road_middle, pos)
                 elif tile_type == 2:
-                    self.screen.blit(self.tile_yellow, pos)
+                    self.screen.blit(self.tile_wall, pos)
                 elif tile_type == 3:
-                    self.screen.blit(self.tile_blue, pos)
+                    self.screen.blit(self.tile_interrogant, pos)
                 elif tile_type == 4:
                     self.screen.blit(self.tile_checkpoint, pos)
                 elif tile_type == 5:
-                    self.screen.blit(self.tile_finish_line, pos)
-
+                    self.screen.blit(self.tile_meta, pos)
+                elif tile_type == 6:
+                    self.screen.blit(self.tile_P1, pos)
+                elif tile_type == 7:
+                    self.screen.blit(self.tile_P2, pos)
+                elif tile_type == 8:
+                    self.screen.blit(self.tile_road_down, pos)
+                elif tile_type == 9:
+                    self.screen.blit(self.tile_road_left, pos)
+                elif tile_type == 10:
+                    self.screen.blit(self.tile_road_right, pos)
+                elif tile_type == 11:
+                    self.screen.blit(self.tile_road_top, pos)
+                elif tile_type == 12:
+                    self.screen.blit(self.tile_road_bottom_right, pos)
+                elif tile_type == 13:
+                    self.screen.blit(self.tile_road_right_top, pos)
+                elif tile_type == 14:                    
+                    self.screen.blit(self.tile_road_top_left, pos)
+                elif tile_type == 15:
+                    self.screen.blit(self.tile_road_left_bottom, pos)
+                elif tile_type == 16:
+                    self.screen.blit(self.tile_road_middle, pos)
+                elif tile_type == 17:
+                    self.screen.blit(self.tile_dot1, pos)
+                elif tile_type == 18:
+                    self.screen.blit(self.tile_dot2, pos)
+                elif tile_type == 19:
+                    self.screen.blit(self.tile_dot3, pos)
+                elif tile_type == 20:
+                    self.screen.blit(self.tile_dot4, pos)
+                elif tile_type == 21:
+                    self.screen.blit(self.tile_kerb1, pos)
+                elif tile_type == 22:
+                    self.screen.blit(self.tile_kerb2, pos)
+                elif tile_type == 23:
+                    self.screen.blit(self.tile_kerb3, pos)
+                elif tile_type == 24:
+                    self.screen.blit(self.tile_kerb4, pos)
+                
+                
+                # unknown tile type; draw a placeholder
         # Debug rectangle last drawn tile (keep behavior similar)
         pygame.draw.rect(self.screen, (255, 0, 255), (col * tile_size, row * tile_size, tile_size, tile_size))
 
-        # Draw local player at center
-        pygame.draw.circle(self.screen, (200, 30, 30), (self.width//2, self.height//2), 30)
+        # Draw local player sprite (centered)
+        try:
+            img = pygame.transform.rotate(self.tile_P1, -self.player.direction)
+            rect = img.get_rect(center=(self.width//2, self.height//2))
+            self.screen.blit(img, rect)
+        except Exception:
+            # fallback to simple circle if image missing
+            pygame.draw.circle(self.screen, (200, 30, 30), (self.width//2, self.height//2), 30)
 
         # Draw opponents
         for peer_id, st in self.opponents.items():
-            # deterministic color per peer
-            color = (100, 100, 100) if st.get('eliminated') else self._color_for_peer(peer_id)
             rx = st.get('render_x', st.get('x_target', 0.0))
             ry = st.get('render_y', st.get('y_target', 0.0))
             screen_x = self.width//2 + int((rx - self.player.x) * tile_size)
             screen_y = self.height//2 + int((ry - self.player.y) * tile_size)
-            pygame.draw.circle(self.screen, color, (screen_x, screen_y), 24)
+            # choose car sprite for this peer
+            car = st.get('car') or self.peer_car_map.get(peer_id) or 'P2'
+            img = self.player_images.get(car)
+            if img:
+                try:
+                    rim = pygame.transform.rotate(img, -st.get('render_direction', 0.0))
+                    rrect = rim.get_rect(center=(screen_x, screen_y))
+                    self.screen.blit(rim, rrect)
+                except Exception:
+                    pygame.draw.circle(self.screen, self._color_for_peer(peer_id), (screen_x, screen_y), 24)
+            else:
+                pygame.draw.circle(self.screen, self._color_for_peer(peer_id), (screen_x, screen_y), 24)
             font = pygame.font.SysFont(None, 20)
             text = font.render(peer_id, True, (255, 255, 255))
             self.screen.blit(text, (screen_x + 26, screen_y - 10))
@@ -314,6 +414,22 @@ class KartGame:
         g = 60 + (s * 193) % 160
         b = 80 + (s * 71) % 160
         return (r, g, b)
+
+    def _assign_car_to_peer(self, peer_id):
+        """Assign a car id ('P1','P2','P3') to a peer, trying to keep them unique.
+        Returns the assigned car key.
+        """
+        # first try available cars not used yet
+        for c in self.available_cars:
+            if c not in self.used_cars:
+                self.peer_car_map[peer_id] = c
+                self.used_cars.add(c)
+                return c
+        # if all used, pick deterministically by hash (cycle)
+        idx = abs(hash(peer_id)) % len(self.available_cars)
+        c = self.available_cars[idx]
+        self.peer_car_map[peer_id] = c
+        return c
 
     def run(self):
         self.running = True
