@@ -8,6 +8,7 @@ import hashlib
 import pygame
 import time
 import queue
+import subprocess
 
 from ui import Button, TextInput
 from network import NetworkManager
@@ -48,11 +49,13 @@ def main():
     btn_join = Button(WIDTH//2 - 160, HEIGHT//2 + 10, 320, 48, 'Join Room', font_normal)
     btn_back = Button(20, HEIGHT - 60, 140, 44, 'Back', font_normal)
     btn_start = Button(WIDTH//2 - 90, HEIGHT - 80, 180, 56, 'Start Game', font_normal, bg_color=(50,200,50))
+    btn_copy = Button(WIDTH//2 + 120, 88, 160, 40, 'Copy Room Hash', font_normal)
 
     input_name = TextInput(WIDTH//2 - 200, HEIGHT//2 - 120, 400, 40, font_normal)
     input_room = TextInput(WIDTH//2 - 200, HEIGHT//2 - 60, 400, 40, font_normal)
 
     peers = []
+    copy_msg = None  # (text, ts)
 
     def on_peer_connected(pid):
         # update peers list asynchronously
@@ -128,6 +131,10 @@ def main():
                         net = None
                         peers = []
                         current_state = STATE_MENU
+                # Copy hash button
+                if btn_copy.handle_event(event) and room_hash_display:
+                    ok = copy_to_clipboard(room_hash_display)
+                    copy_msg = ('Copied!' if ok else 'Copy failed', time.time())
 
         # process async peer messages
         try:
@@ -174,6 +181,12 @@ def main():
             screen.blit(title, (WIDTH//2 - title.get_width()//2, 20))
             room_lbl = font_normal.render('Room: ' + (room_hash_display[:8] if room_hash_display else ''), True, (200,200,255))
             screen.blit(room_lbl, (40, 100))
+            btn_copy.draw(screen)
+
+            # show feedback message for copy
+            if copy_msg and time.time() - copy_msg[1] < 2.0:
+                feedback = font_normal.render(copy_msg[0], True, (180,255,180))
+                screen.blit(feedback, (WIDTH//2 - feedback.get_width()//2, 140))
 
             # peers
             peer_y = 150
@@ -201,6 +214,19 @@ def main():
             pass
     pygame.quit()
     sys.exit(0)
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Try wl-copy then xclip. Returns True on success."""
+    try:
+        subprocess.run(['wl-copy'], input=text.encode('utf-8'), check=True, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        try:
+            subprocess.run(['xclip', '-selection', 'clipboard'], input=text.encode('utf-8'), check=True, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            return False
 
 
 if __name__ == '__main__':
