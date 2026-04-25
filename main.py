@@ -209,6 +209,9 @@ def main():
     # Elementos UI - Lobby
     btn_start_lobby = Button(WIDTH//2 - 150, HEIGHT - 100, 300, 40, "Empezar Partida", font_normal, bg_color=(50, 200, 50), hover_color=(50, 150, 50))
 
+    # Elemento UI - Fin de partida
+    btn_end_to_menu = Button(WIDTH//2 - 140, HEIGHT - 80, 280, 44, "Volver al menú principal", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
+
     # Elementos UI - Unirse a Sala
     input_join_name = TextInput(WIDTH//2 - 200, HEIGHT//2 - 120, 400, 40, font_normal)
     input_join_room = TextInput(WIDTH//2 - 200, HEIGHT//2 - 30, 400, 40, font_normal)
@@ -217,6 +220,38 @@ def main():
 
     def clamp_window_size(w, h):
         return max(MIN_WIDTH, w), max(MIN_HEIGHT, h)
+
+    def reset_match_state():
+        nonlocal my_board, has_committed_board, battle_phase, all_players_sorted, current_turn_index
+        nonlocal game_over, winner_peer_id
+        my_board = None
+        has_committed_board = False
+        battle_phase = False
+        attack_boards.clear()
+        all_players_sorted.clear()
+        current_turn_index = 0
+        eliminated_players.clear()
+        elimination_order.clear()
+        final_ranking.clear()
+        game_over = False
+        winner_peer_id = None
+
+    def return_to_main_menu():
+        nonlocal current_state, net_manager, is_host
+        if net_manager:
+            net_manager.stop()
+        net_manager = None
+        is_host = False
+        player_commits.clear()
+
+        while not msg_queue.empty():
+            try:
+                msg_queue.get_nowait()
+            except Exception:
+                break
+
+        reset_match_state()
+        current_state = STATE_MENU
 
     def fit_board_cell_size(board_size_cells, max_w, max_h, max_cell, min_cell=8):
         if max_w <= 0 or max_h <= 0:
@@ -390,6 +425,7 @@ def main():
         # Lobby / batalla
         btn_start_lobby.rect = pygame.Rect(WIDTH // 2 - big_btn_w // 2, HEIGHT - 68, big_btn_w, 44)
         btn_fire.rect = pygame.Rect(WIDTH // 2 - 84, HEIGHT - 62, 168, 44)
+        btn_end_to_menu.rect = pygame.Rect(WIDTH // 2 - 170, HEIGHT - 74, 340, 46)
 
         # Fase colocación: reescalar tablero para que quepa con márgenes e instrucciones
         if my_board and not battle_phase:
@@ -417,6 +453,13 @@ def main():
                 ab.cell_size = layout["attack_cell"]
                 ab.x_offset = layout["attack_start_x"] + i * (12 * layout["attack_cell"] + layout["attack_gap"])
                 ab.y_offset = layout["attack_y"]
+
+            if game_over:
+                panel_w = min(560, max(360, WIDTH - 120))
+                panel_h = min(420, max(260, HEIGHT - 120))
+                panel_x = (WIDTH - panel_w) // 2
+                panel_y = (HEIGHT - panel_h) // 2
+                btn_end_to_menu.rect = pygame.Rect(panel_x + panel_w // 2 - 170, panel_y + panel_h - 52, 340, 40)
 
     update_ui_layout()
 
@@ -515,6 +558,10 @@ def main():
                         has_committed_board = True
                         
                 elif battle_phase:
+                    if game_over and btn_end_to_menu.handle_event(event):
+                        return_to_main_menu()
+                        continue
+
                     ensure_current_turn_is_alive()
                     turn_owner = all_players_sorted[current_turn_index] if all_players_sorted else None
                     is_my_turn = (not game_over and turn_owner == net_manager.peer_id and net_manager.peer_id not in eliminated_players)
@@ -830,7 +877,9 @@ def main():
                     if net_manager and net_manager.peer_id in ranking_lines:
                         my_pos = ranking_lines.index(net_manager.peer_id) + 1
                         pos_lbl = font_normal.render(f"Tu posición: {pos_label(my_pos)}", True, (180, 255, 180))
-                        screen.blit(pos_lbl, (panel_x + panel_w // 2 - pos_lbl.get_width() // 2, panel_y + panel_h - 54))
+                        screen.blit(pos_lbl, (panel_x + panel_w // 2 - pos_lbl.get_width() // 2, panel_y + panel_h - 98))
+
+                    btn_end_to_menu.draw(screen)
             
         pygame.display.flip()
         clock.tick(FPS)
