@@ -74,6 +74,8 @@ def main():
     last_move_send = 0
     input_dx = 0
     input_jump = False
+    input_tab_held = False
+    input_inventory_open = False
     
     def set_opengl_mode():
         global WIDTH, HEIGHT
@@ -241,6 +243,8 @@ def main():
                     if event.key == K_a: input_dx = -1
                     elif event.key == K_d: input_dx = 1
                     elif event.key == K_SPACE: input_jump = True
+                    elif event.key == K_TAB: input_tab_held = True
+                    elif event.key == K_e: input_inventory_open = not input_inventory_open
                     # Seleccion de items (1-4)
                     elif event.key == K_1: players[net_manager.peer_id].selected_item = B_DIRT
                     elif event.key == K_2: players[net_manager.peer_id].selected_item = B_STONE
@@ -250,6 +254,7 @@ def main():
                     if event.key == K_a and input_dx == -1: input_dx = 0
                     elif event.key == K_d and input_dx == 1: input_dx = 0
                     elif event.key == K_SPACE: input_jump = False
+                    elif event.key == K_TAB: input_tab_held = False
                 elif event.type == MOUSEBUTTONDOWN:
                     my_player = players.get(net_manager.peer_id)
                     if my_player and renderer:
@@ -400,7 +405,7 @@ def main():
                     last_move_send = now
 
             if renderer and world:
-                renderer.render(world, players, net_manager.peer_id)
+                renderer.render(world, players, net_manager.peer_id, input_tab_held, input_inventory_open, font_normal)
             
         pygame.display.flip()
         clock.tick(FPS)

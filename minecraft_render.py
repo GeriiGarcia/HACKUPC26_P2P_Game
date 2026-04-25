@@ -1,7 +1,7 @@
 import pygame
 from OpenGL.GL import *
 from OpenGL.GLU import *
-from minecraft_core import B_DIRT, B_STONE, B_WOOD, B_WHEAT, WORLD_WIDTH, WORLD_HEIGHT
+from minecraft_core import B_DIRT, B_STONE, B_WOOD, B_WHEAT, WORLD_WIDTH, WORLD_HEIGHT, ITEM_NAMES
 
 # Colores (R, G, B)
 COLOR_SKY = (0.5, 0.7, 1.0)
@@ -39,7 +39,7 @@ class Renderer:
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-    def render(self, world, players, my_peer_id):
+    def render(self, world, players, my_peer_id, show_tab=False, show_inv=False, font=None):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
         
@@ -130,15 +130,34 @@ class Renderer:
             glVertex2f(p.x, p.y + p.height)
             glEnd()
             
-    def render_hud(self, surface, player):
-        """Renderizamos el HUD usando la surface de pygame por encima del contexto GL.
-        Nota: Pygame con OpenGL double buffer no soporta facilmente blit encima.
-        Por lo que lo dibujaremos usando texto de Pygame renderizado como textura o simplemente no lo mezclaremos,
-        sino que usaremos Pygame para renderizar texto y luego lo convertimos a textura GL."""
-        # Para simplificar en esta iteración sin texturas GL complejas, 
-        # confiaremos en que el usuario vea su inventario en terminal, o implementaremos 
-        # text blitting básico.
-        pass
+        if font:
+            if show_tab:
+                self.draw_player_list(players, my_peer_id, font)
+            if show_inv and my_player:
+                self.draw_inventory(my_player.inventory, font)
+            
+    def draw_player_list(self, players, my_peer_id, font):
+        x = self.width // 2 - 100
+        y = 50
+        self.draw_text("=== Jugadores Conectados ===", x, y, font, (255, 255, 0, 255))
+        y += 30
+        for p_id in players.keys():
+            color = (50, 255, 50, 255) if p_id == my_peer_id else (255, 255, 255, 255)
+            self.draw_text(f"- {p_id}", x, y, font, color)
+            y += 30
+
+    def draw_inventory(self, inventory, font):
+        x = 50
+        y = 50
+        self.draw_text("=== Mi Inventario ===", x, y, font, (0, 255, 255, 255))
+        y += 30
+        if not inventory:
+            self.draw_text("(Vacío)", x, y, font)
+        else:
+            for item_id, amount in inventory.items():
+                name = ITEM_NAMES.get(item_id, f"Objeto {item_id}")
+                self.draw_text(f"{name}: {amount}", x, y, font)
+                y += 30
 
     def draw_text(self, text, x, y, font, color=(255, 255, 255, 255)):
         """Dibuja texto sobre OpenGL usando PyGame."""
