@@ -169,7 +169,7 @@ class Renderer:
 
         # --- Players (Stardew-style coloured characters) ---
         for p_id, p in players.items():
-            self._draw_player(p, p_id == my_peer_id)
+            self._draw_player(p, p_id == my_peer_id, p_id, font, cam_x, cam_y)
 
         # --- HUD ---
         if font:
@@ -198,7 +198,7 @@ class Renderer:
     # ------------------------------------------------------------------
     # Player drawing – simple but with body/head/eyes
     # ------------------------------------------------------------------
-    def _draw_player(self, p, is_me):
+    def _draw_player(self, p, is_me, p_id, font, cam_x, cam_y):
         base = COLOR_PLAYER if is_me else COLOR_OTHER_PLAYER
         # Body
         glColor3f(*base)
@@ -241,6 +241,13 @@ class Renderer:
         glVertex2f(p.x,           p.y + p.height)
         glEnd()
         glLineWidth(1)
+
+        # Name above head
+        if font and p_id:
+            screen_x = (p.x - cam_x) * BLOCK_SIZE_PX
+            screen_y = (p.y - cam_y) * BLOCK_SIZE_PX
+            tw = font.size(p_id)[0]
+            self.draw_text(p_id, screen_x + (p.width * BLOCK_SIZE_PX)/2 - tw/2, screen_y - 20, font, (255, 255, 255, 255))
 
     # ------------------------------------------------------------------
     # Hotbar (bottom centre)

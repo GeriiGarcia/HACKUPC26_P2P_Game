@@ -4,3 +4,4 @@ __pycache__/ui.cpython-312.pyc
 /.venv/*
 /keys/*
 inventories.json
+chests.json

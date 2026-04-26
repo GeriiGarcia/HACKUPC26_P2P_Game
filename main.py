@@ -814,8 +814,13 @@ def main():
                 show_crafting = crafting_menu and crafting_menu.is_open
                 renderer.render(world, players, net_manager.peer_id, input_tab_held, input_inventory_open, show_crafting, font_normal)
                 if open_chest_id and open_chest_id in chests:
-                    my_player = players.get(net_manager.peer_id)
-                    renderer.draw_chest_popup(my_player.inventory if my_player else {}, chests[open_chest_id], font_normal)
+                    chest = chests[open_chest_id]
+                    # Check distance (limit to 5 blocks)
+                    dist = math.sqrt((my_player.x - chest.position[0])**2 + (my_player.y - chest.position[1])**2)
+                    if dist > 5:
+                        open_chest_id = None
+                    else:
+                        renderer.draw_chest_popup(my_player.inventory if my_player else {}, chest, font_normal)
             
             # Ya no necesitamos dibujar manualmente el menú de crafting, el renderer lo hace
             
