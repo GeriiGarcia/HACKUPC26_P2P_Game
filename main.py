@@ -146,11 +146,6 @@ def main():
             else:
                 saved_inventories[room_key][net_manager.peer_id] = inv_data
         
-        # Guardar inventarios de OTROS jugadores en texto plano (para que al reconectar lo vean)
-        for pid, p in players.items():
-            if pid != net_manager.peer_id and p.inventory:
-                saved_inventories[room_key][pid] = p.serialize_inventory()
-        
         save_all_inventories(saved_inventories)
 
     def restore_inventory(peer_id):
@@ -370,6 +365,8 @@ def main():
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                save_my_inventory()
+                save_my_chests()
                 running = False
             elif event.type == pygame.VIDEORESIZE:
                 new_w, new_h = clamp_window_size(*event.size)
@@ -618,7 +615,12 @@ def main():
                         room_key = room_hash_display
                         if room_key not in saved_inventories:
                             saved_inventories[room_key] = {}
-                        saved_inventories[room_key].update(inv_data)
+                        
+                        # Actualizar solo inventarios ajenos
+                        for pid, pdata in inv_data.items():
+                            if pid != net_manager.peer_id:
+                                saved_inventories[room_key][pid] = pdata
+                        
                         save_all_inventories(saved_inventories)
                     # Restaurar mi propio inventario
                     restore_inventory(net_manager.peer_id)
