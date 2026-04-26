@@ -17,6 +17,7 @@ B_LEAF = 6
 B_SAND = 7
 B_FLOWER_RED = 8
 B_FLOWER_YELLOW = 9
+B_CHEST = 100  # Cofre especial (entidad, no material)
 
 BLOCK_NAMES = {
     B_AIR: "Aire",
@@ -29,6 +30,7 @@ BLOCK_NAMES = {
     B_SAND: "Arena",
     B_FLOWER_RED: "Flor Roja",
     B_FLOWER_YELLOW: "Flor Amarilla",
+    B_CHEST: "Cofre",
 }
 
 # Items
@@ -44,6 +46,7 @@ I_SAND = 7
 T_PICKAXE = 10
 T_SHOVEL = 11
 T_AXE = 12
+I_CHEST = 20    # Cofre privado
 
 ITEM_NAMES = {
     I_DIRT: "Tierra",
@@ -56,6 +59,7 @@ ITEM_NAMES = {
     T_PICKAXE: "Pico",
     T_SHOVEL: "Pala",
     T_AXE: "Hacha",
+    I_CHEST: "Cofre",
 }
 
 # Non-solid blocks (player can walk through)
@@ -154,8 +158,9 @@ class World:
 CRAFTING_RECIPES = {
     T_PICKAXE: {I_WOOD: 1, I_STONE: 3},
     T_SHOVEL: {I_WOOD: 1, I_STONE: 1},
-    T_AXE: {I_WOOD: 4}, # Hacha: 1 madera + 3 madera = 4 madera
-    I_BREAD: {I_WHEAT: 3}
+    T_AXE: {I_WOOD: 4}, # Hacha: 4 madera
+    I_BREAD: {I_WHEAT: 3},
+    I_CHEST: {I_WOOD: 4}  # Cofre: 4 madera
 }
 
 # --- Player Logic ---
@@ -257,6 +262,10 @@ class Player:
         if action == "break":
             block = world.get_block(bx, by)
             if block != B_AIR:
+                # Los cofres no se pueden romper con click izquierdo.
+                # Deben quedarse siempre colocados en el suelo.
+                if block == B_CHEST:
+                    return False
                 world.set_block(bx, by, B_AIR)
                 # Map block -> item drop
                 drop = block
@@ -279,6 +288,11 @@ class Player:
                 if self.selected_item in (I_DIRT, I_STONE, I_WOOD, I_WHEAT, I_SAND):
                     if self.remove_item(self.selected_item, 1):
                         world.set_block(bx, by, self.selected_item)
+                        return True
+                elif self.selected_item == I_CHEST:
+                    if self.remove_item(I_CHEST, 1):
+                        world.set_block(bx, by, B_CHEST)
+                        # El cofre se crea en main.py cuando se sincroniza
                         return True
         return False
 
@@ -303,3 +317,55 @@ class Player:
         self.inventory = {int(k): v for k, v in raw_inv.items()}
         self.health = data.get("health", 10)
         self.hunger = data.get("hunger", 10)
+
+
+# --- Chests (Cofres Privados) ---
+class Chest:
+    """Cofre privado que pertenece a un jugador. Su contenido está encriptado con su clave pública."""
+    
+    def __init__(self, chest_id, owner_peer_id, position=(0, 0)):
+        """
+        chest_id: identificador único del cofre (ej: uuid o hash)
+        owner_peer_id: peer_id del propietario (su clave pública se usará para encriptar)
+        position: (x, y) coordenadas del cofre en el mundo
+        """
+        self.chest_id = chest_id
+        self.owner_peer_id = owner_peer_id
+        self.inventory = {}  # item_id -> amount
+        self.position = position  # (world_x, world_y)
+    
+    def add_item(self, item_id, amount=1):
+        """Agrega un item al cofre."""
+        if item_id in self.inventory:
+            self.inventory[item_id] += amount
+        else:
+            self.inventory[item_id] = amount
+    
+    def remove_item(self, item_id, amount=1):
+        """Remueve un item del cofre si hay suficientes."""
+        if item_id in self.inventory and self.inventory[item_id] >= amount:
+            self.inventory[item_id] -= amount
+            if self.inventory[item_id] == 0:
+                del self.inventory[item_id]
+            return True
+        return False
+    
+    def serialize(self):
+        """Serializa el inventario del cofre para guardar encriptado."""
+        return {
+            "chest_id": self.chest_id,
+            "owner_peer_id": self.owner_peer_id,
+            "position": [self.position[0], self.position[1]],
+            "inventory": {str(k): v for k, v in self.inventory.items()}
+        }
+    
+    @staticmethod
+    def deserialize(data):
+        """Deserializa los datos del cofre."""
+        pos = data.get("position", [0, 0])
+        if not isinstance(pos, (list, tuple)) or len(pos) != 2:
+            pos = [0, 0]
+        chest = Chest(data.get("chest_id"), data.get("owner_peer_id"), position=(int(pos[0]), int(pos[1])))
+        raw_inv = data.get("inventory", {})
+        chest.inventory = {int(k): v for k, v in raw_inv.items()}
+        return chest

@@ -4,8 +4,8 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 from minecraft_core import (
     B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT, B_GRASS, B_LEAF,
-    B_SAND, B_FLOWER_RED, B_FLOWER_YELLOW,
-    WORLD_WIDTH, WORLD_HEIGHT, ITEM_NAMES
+    B_SAND, B_FLOWER_RED, B_FLOWER_YELLOW, B_CHEST,
+    WORLD_WIDTH, WORLD_HEIGHT, ITEM_NAMES, CRAFTING_RECIPES
 )
 
 # =====================================================================
@@ -27,6 +27,7 @@ BLOCK_COLORS = {
     B_SAND:          ((0.90, 0.82, 0.58), (0.95, 0.88, 0.65)),   # warm sand
     B_FLOWER_RED:    ((0.92, 0.78, 0.15), (0.98, 0.88, 0.25)),   # yellow variant
     B_FLOWER_YELLOW: ((0.95, 0.82, 0.18), (1.00, 0.90, 0.30)),   # sunflower
+    B_CHEST:         ((0.60, 0.40, 0.20), (0.75, 0.55, 0.30)),   # larger wooden chest
 }
 
 # Players
@@ -40,6 +41,7 @@ ITEM_COLORS = {
     3: BLOCK_COLORS[B_WOOD][0],
     4: BLOCK_COLORS[B_WHEAT][0],
     7: BLOCK_COLORS[B_SAND][0],
+    20: BLOCK_COLORS[B_CHEST][0],
 }
 
 BLOCK_SIZE_PX = 32
@@ -80,7 +82,7 @@ class Renderer:
     # Main render
     # ------------------------------------------------------------------
     def render(self, world, players, my_peer_id,
-               show_tab=False, show_inv=False, font=None):
+               show_tab=False, show_inv=False, show_crafting=False, font=None):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
 
@@ -176,6 +178,8 @@ class Renderer:
                 self.draw_player_list(players, my_peer_id, font)
             if show_inv:
                 self.draw_inventory_popup(my_player.inventory, font)
+            if show_crafting:
+                self.draw_crafting_menu(my_player.inventory, font)
 
     # ------------------------------------------------------------------
     # Sky gradient
@@ -366,6 +370,134 @@ class Renderer:
                 y += 28
 
     # ==================================================================
+    def draw_crafting_menu(self, player_inventory, font):
+        """Dibuja el menú de fabricación con los items que se pueden hacer."""
+        panel_w = 400
+        recipes_list = list(CRAFTING_RECIPES.items())
+        rows = max(1, len(recipes_list))
+        panel_h = 42 + rows * 28 + 14
+        px = 24
+        py = 24
+        self._draw_rect_px(px, py, panel_w, panel_h, (0.15, 0.12, 0.08, 0.90))
+        self._draw_rect_outline_px(px, py, panel_w, panel_h, (0.70, 0.55, 0.30, 1.0))
+        self.draw_text("Menú de Fabricación  [C]", px + 14, py + 10, font, (220, 200, 120, 255))
+        y = py + 40
+        
+        if not recipes_list:
+            self.draw_text("(sin recetas)", px + 18, y, font, (160, 155, 140, 255))
+        else:
+            for item_id, requirements in recipes_list:
+                name = ITEM_NAMES.get(item_id, f"#{item_id}")
+                
+                # Verificar si se puede fabricar
+                can_craft = True
+                req_text = []
+                for req_id, req_qty in requirements.items():
+                    player_qty = player_inventory.get(req_id, 0)
+                    can_craft = can_craft and (player_qty >= req_qty)
+                    req_name = ITEM_NAMES.get(req_id, f"#{req_id}")
+                    req_text.append(f"{req_qty}x {req_name}")
+                
+                # Color según disponibilidad
+                text_color = (100, 255, 100, 255) if can_craft else (255, 100, 100, 255)
+                req_str = " + ".join(req_text) if req_text else "?"
+                self.draw_text(f"  {name}: {req_str}", px + 18, y, font, text_color)
+                y += 28
+
+    def _chest_ui_layout(self, player_inventory, chest_inventory):
+        p_items = sorted(player_inventory.items(), key=lambda kv: kv[0])
+        c_items = sorted(chest_inventory.items(), key=lambda kv: kv[0])
+        rows = max(1, len(p_items), len(c_items))
+
+        panel_w = min(760, max(560, self.width - 40))
+        panel_h = 86 + rows * 30 + 16
+        px = (self.width - panel_w) // 2
+        py = 24
+
+        col_gap = 18
+        col_w = (panel_w - 36 - col_gap) // 2
+        left_x = px + 18
+        right_x = left_x + col_w + col_gap
+        header_y = py + 50
+        row_h = 30
+
+        return {
+            "p_items": p_items,
+            "c_items": c_items,
+            "rows": rows,
+            "px": px,
+            "py": py,
+            "panel_w": panel_w,
+            "panel_h": panel_h,
+            "left_x": left_x,
+            "right_x": right_x,
+            "col_w": col_w,
+            "header_y": header_y,
+            "row_h": row_h,
+        }
+
+    def draw_chest_popup(self, player_inventory, chest, font):
+        """UI de cofre con transferencia click-to-transfer."""
+        layout = self._chest_ui_layout(player_inventory, chest.inventory)
+        px, py = layout["px"], layout["py"]
+        panel_w, panel_h = layout["panel_w"], layout["panel_h"]
+        left_x, right_x = layout["left_x"], layout["right_x"]
+        col_w, row_h = layout["col_w"], layout["row_h"]
+        p_items, c_items = layout["p_items"], layout["c_items"]
+
+        self._draw_rect_px(px, py, panel_w, panel_h, (0.14, 0.10, 0.06, 0.94))
+        self._draw_rect_outline_px(px, py, panel_w, panel_h, (0.78, 0.62, 0.32, 1.0))
+
+        owner = getattr(chest, "owner_peer_id", "?")
+        self.draw_text(f"Cofre de {owner}  [Click derecho para cerrar]", px + 14, py + 10, font, (240, 220, 150, 255))
+        self.draw_text("Click en un item para mover 1 unidad", px + 14, py + 30, font, (200, 190, 170, 255))
+
+        self.draw_text("Tu inventario", left_x, py + 52, font, (180, 240, 220, 255))
+        self.draw_text("Contenido del cofre", right_x, py + 52, font, (240, 220, 150, 255))
+
+        start_y = py + 74
+        for i in range(layout["rows"]):
+            y = start_y + i * row_h
+            # fondos de slots
+            self._draw_rect_px(left_x, y, col_w, 24, (0.10, 0.14, 0.10, 0.72))
+            self._draw_rect_outline_px(left_x, y, col_w, 24, (0.30, 0.45, 0.30, 0.95))
+            self._draw_rect_px(right_x, y, col_w, 24, (0.16, 0.12, 0.08, 0.72))
+            self._draw_rect_outline_px(right_x, y, col_w, 24, (0.55, 0.42, 0.22, 0.95))
+
+            if i < len(p_items):
+                item_id, amount = p_items[i]
+                name = ITEM_NAMES.get(item_id, f"#{item_id}")
+                color = ITEM_COLORS.get(item_id, (0.6, 0.6, 0.6))
+                self._draw_rect_px(left_x + 6, y + 5, 14, 14, (*color, 1.0))
+                self.draw_text(f"{name}: x{amount}", left_x + 26, y + 4, font, (225, 230, 220, 255))
+
+            if i < len(c_items):
+                item_id, amount = c_items[i]
+                name = ITEM_NAMES.get(item_id, f"#{item_id}")
+                color = ITEM_COLORS.get(item_id, (0.6, 0.6, 0.6))
+                self._draw_rect_px(right_x + 6, y + 5, 14, 14, (*color, 1.0))
+                self.draw_text(f"{name}: x{amount}", right_x + 26, y + 4, font, (230, 225, 210, 255))
+
+    def chest_ui_hit(self, mouse_x, mouse_y, player_inventory, chest_inventory):
+        """Devuelve ('player'|'chest', item_id) si se clicó un slot del UI."""
+        layout = self._chest_ui_layout(player_inventory, chest_inventory)
+        left_x, right_x = layout["left_x"], layout["right_x"]
+        col_w, row_h = layout["col_w"], layout["row_h"]
+        start_y = layout["py"] + 74
+        p_items, c_items = layout["p_items"], layout["c_items"]
+
+        for i, (item_id, _amount) in enumerate(p_items):
+            y = start_y + i * row_h
+            if left_x <= mouse_x <= left_x + col_w and y <= mouse_y <= y + 24:
+                return ("player", item_id)
+
+        for i, (item_id, _amount) in enumerate(c_items):
+            y = start_y + i * row_h
+            if right_x <= mouse_x <= right_x + col_w and y <= mouse_y <= y + 24:
+                return ("chest", item_id)
+
+        return None
+
     # Low-level pixel helpers
     # ==================================================================
     def _set_pixel_projection(self):
@@ -425,3 +557,34 @@ class Renderer:
         glMatrixMode(GL_PROJECTION)
         glPopMatrix()
         glMatrixMode(GL_MODELVIEW)
+
+    def crafting_menu_hit(self, mouse_x, mouse_y, show_crafting):
+        """Detecta si el usuario hizo click en algún item del menú de fabricación.
+        Retorna el item_id si se hizo click, None si no."""
+        if not show_crafting:
+            return None
+        
+        panel_w = 400
+        recipes_list = list(CRAFTING_RECIPES.items())
+        rows = max(1, len(recipes_list))
+        panel_h = 42 + rows * 28 + 14
+        px = 24
+        py = 24
+        
+        # Verificar si el click está dentro del panel
+        if not (px <= mouse_x <= px + panel_w and py <= mouse_y <= py + panel_h):
+            return None
+        
+        # Verificar en qué fila hizo click (cada fila tiene 28 pixels de alto)
+        row_start = py + 40  # Inicio de los items
+        relative_y = mouse_y - row_start
+        
+        if relative_y < 0:
+            return None
+        
+        row = relative_y // 28
+        
+        if row < len(recipes_list):
+            return recipes_list[row][0]
+        
+        return None

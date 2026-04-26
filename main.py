@@ -9,12 +9,13 @@ import time
 import json
 import os
 from pygame.locals import *
-from ui import Button, TextInput
+from ui import Button, TextInput, CraftingMenu
 from network import NetworkManager
-from minecraft_core import World, Player, B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT, B_GRASS, B_SAND
+from minecraft_core import World, Player, B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT, B_GRASS, B_SAND, B_CHEST, I_CHEST, CRAFTING_RECIPES, ITEM_NAMES, Chest
 from minecraft_render import Renderer, BLOCK_SIZE_PX
 
 INVENTORY_SAVE_FILE = "inventories.json"
+CHESTS_SAVE_FILE = "chests.json"
 
 def load_all_inventories():
     if os.path.exists(INVENTORY_SAVE_FILE):
@@ -31,6 +32,24 @@ def save_all_inventories(data):
             json.dump(data, f)
     except Exception as e:
         print(f"Error guardando inventarios: {e}")
+
+def load_all_chests():
+    """Carga todos los cofres guardados encriptados."""
+    if os.path.exists(CHESTS_SAVE_FILE):
+        try:
+            with open(CHESTS_SAVE_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_all_chests(data):
+    """Guarda todos los cofres encriptados."""
+    try:
+        with open(CHESTS_SAVE_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Error guardando cofres: {e}")
 
 # Configuración básica
 WIDTH, HEIGHT = 800, 600
@@ -97,6 +116,10 @@ def main():
     input_tab_held = False
     input_inventory_open = False
     saved_inventories = load_all_inventories()  # {room_hash: {peer_name: {inventory data}}}
+    saved_chests = load_all_chests()  # {room_hash: {chest_id: {encrypted: ...}}}
+    crafting_menu = None  # Se inicializa cuando empieza el juego
+    chests = {}  # chest_id -> Chest
+    open_chest_id = None
     
     def set_opengl_mode():
         global WIDTH, HEIGHT
@@ -155,6 +178,99 @@ def main():
         room_key = room_hash_display
         return saved_inventories.get(room_key, {})
 
+    def save_my_chests():
+        """Guarda los cofres del jugador local encriptados con su clave pública."""
+        if not net_manager or not room_hash_display:
+            return
+        room_key = room_hash_display
+        if room_key not in saved_chests:
+            saved_chests[room_key] = {}
+
+        prev_room_data = saved_chests.get(room_key, {})
+        room_data = {}
+
+        # Guardar cofres en formato cifrado (igual que inventario)
+        for cid, chest in chests.items():
+            entry = {
+                "owner_peer_id": chest.owner_peer_id,
+                "position": [int(chest.position[0]), int(chest.position[1])],
+            }
+
+            # Solo el dueño puede cifrar/descifrar su contenido real
+            if chest.owner_peer_id == net_manager.peer_id:
+                # Usar esquema híbrido para cofres (AES + RSA)
+                encrypted = net_manager.encrypt_chest(chest.serialize())
+                if encrypted:
+                    entry["encrypted"] = encrypted
+            else:
+                # Preservar payload cifrado previo de cofres ajenos si existía
+                prev_entry = prev_room_data.get(cid, {})
+                if isinstance(prev_entry, dict) and "encrypted" in prev_entry:
+                    entry["encrypted"] = prev_entry["encrypted"]
+
+            room_data[cid] = entry
+
+        saved_chests[room_key] = room_data
+        save_all_chests(saved_chests)
+
+    def restore_chests():
+        """Restaura cofres guardados para la sala actual."""
+        nonlocal chests
+        room_key = room_hash_display
+        chests = {}
+        if room_key in saved_chests:
+            for cid, cdata in saved_chests[room_key].items():
+                try:
+                    # Formato cifrado moderno
+                    if isinstance(cdata, dict) and "owner_peer_id" in cdata and "position" in cdata:
+                        owner = cdata.get("owner_peer_id")
+                        pos = cdata.get("position", [0, 0])
+                        if not isinstance(pos, (list, tuple)) or len(pos) != 2:
+                            pos = [0, 0]
+                        px, py = int(pos[0]), int(pos[1])
+
+                        chest = Chest(cid, owner, position=(px, py))
+                        encrypted = cdata.get("encrypted")
+
+                        # Solo el dueño puede recuperar contenido
+                        if encrypted and owner == net_manager.peer_id:
+                            # Intentar descifrado híbrido
+                            data = net_manager.decrypt_chest(encrypted)
+                            if data:
+                                chest = Chest.deserialize(data)
+                                chest.chest_id = cid
+                                chest.owner_peer_id = owner
+                                chest.position = (px, py)
+
+                        chests[cid] = chest
+                    else:
+                        # Legacy plaintext
+                        chests[cid] = Chest.deserialize(cdata)
+                except Exception as e:
+                    print(f"[CHEST] Error restaurando cofre {cid}: {e}")
+
+    def broadcast_chest_update(chest):
+        """Propaga en la cadena (ledger) snapshot cifrado del cofre."""
+        if not net_manager or chest.owner_peer_id != net_manager.peer_id:
+            return
+        # Usar esquema híbrido para cofres
+        encrypted = net_manager.encrypt_chest(chest.serialize())
+        if not encrypted:
+            return
+        net_manager.send_event(
+            "CHEST_UPDATE",
+            chest_id=chest.chest_id,
+            owner_peer_id=chest.owner_peer_id,
+            position=[int(chest.position[0]), int(chest.position[1])],
+            encrypted=encrypted,
+        )
+
+    def find_chest_at(x, y):
+        for cid, chest in chests.items():
+            if getattr(chest, "position", None) == (x, y):
+                return cid
+        return None
+
     def on_peer_connected(peer_id):
         if current_state == STATE_GAME and world:
             # Cualquier jugador ya en partida envía el sync (no solo el host)
@@ -175,6 +291,7 @@ def main():
         if peer_id in players:
             # Guardar su inventario antes de quitarlo
             save_my_inventory()
+            save_my_chests()
             del players[peer_id]
             print(f"[GAME] Jugador {peer_id} ha salido del juego")
 
@@ -332,9 +449,11 @@ def main():
                     players[net_manager.peer_id] = Player()
                     for p in players_list:
                         players[p] = Player()
+                    restore_chests()
                         
                     screen = set_opengl_mode()
                     renderer = Renderer(WIDTH, HEIGHT)
+                    crafting_menu = CraftingMenu(CRAFTING_RECIPES, ITEM_NAMES)
                     current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
@@ -344,6 +463,11 @@ def main():
                     elif event.key == K_SPACE: input_jump = True
                     elif event.key == K_TAB: input_tab_held = True
                     elif event.key == K_e: input_inventory_open = not input_inventory_open
+                    elif event.key == K_c:
+                        # Abre/cierra el menú de fabricación con C
+                        if crafting_menu is None:
+                            crafting_menu = CraftingMenu(CRAFTING_RECIPES, ITEM_NAMES)
+                        crafting_menu.toggle()
                     # Seleccion de items (1-4)
                     elif event.key == K_1: players[net_manager.peer_id].selected_item = B_DIRT
                     elif event.key == K_2: players[net_manager.peer_id].selected_item = B_STONE
@@ -356,6 +480,54 @@ def main():
                     elif event.key == K_TAB: input_tab_held = False
                 elif event.type == MOUSEBUTTONDOWN:
                     my_player = players.get(net_manager.peer_id)
+
+                    # Primero, clics del UI del cofre (click-to-transfer)
+                    if open_chest_id and open_chest_id in chests and my_player and renderer and event.button == 1:
+                        open_chest = chests[open_chest_id]
+                        hit = renderer.chest_ui_hit(event.pos[0], event.pos[1], my_player.inventory, open_chest.inventory)
+                        if hit:
+                            side, item_id = hit
+                            if side == "player":
+                                if my_player.remove_item(item_id, 1):
+                                    open_chest.add_item(item_id, 1)
+                                    save_my_inventory()
+                                    save_my_chests()
+                                    broadcast_chest_update(open_chest)
+                                    print(f"[CHEST] Guardado 1x {ITEM_NAMES.get(item_id, item_id)} en cofre")
+                            elif side == "chest":
+                                if open_chest.remove_item(item_id, 1):
+                                    my_player.add_item(item_id, 1)
+                                    save_my_inventory()
+                                    save_my_chests()
+                                    broadcast_chest_update(open_chest)
+                                    print(f"[CHEST] Retirado 1x {ITEM_NAMES.get(item_id, item_id)} del cofre")
+                            continue
+                    
+                    # Primero, procesar clics del menú de fabricación si está abierto
+                    if crafting_menu and crafting_menu.is_open and my_player and renderer and event.button == 1:
+                        show_crafting = crafting_menu.is_open
+                        clicked_item = renderer.crafting_menu_hit(event.pos[0], event.pos[1], show_crafting)
+                        print(f"[DEBUG] Click en menú: pos={event.pos}, clicked_item={clicked_item}")
+                        if clicked_item is not None:
+                            print(f"[DEBUG] Intentando fabricar item {clicked_item}")
+                            print(f"[DEBUG] Inventario antes: {my_player.inventory}")
+                            try:
+                                if my_player.craft(clicked_item):
+                                    print(f"[CRAFTING] ¡Fabricado {ITEM_NAMES.get(clicked_item, f'Item {clicked_item}')}!")
+                                    print(f"[DEBUG] Inventario después: {my_player.inventory}")
+                                    save_my_inventory()
+                                    print(f"[DEBUG] Inventario guardado correctamente")
+                                    # Cerrar el menú después de fabricar
+                                    crafting_menu.toggle()
+                                    print(f"[DEBUG] Menú cerrado")
+                                else:
+                                    print(f"[DEBUG] craft() retornó False. can_craft={my_player.can_craft(clicked_item)}")
+                            except Exception as e:
+                                print(f"[ERROR] Excepción al fabricar: {type(e).__name__}: {e}")
+                                import traceback
+                                traceback.print_exc()
+                            continue  # Continuar con el siguiente evento
+                    
                     if my_player and renderer:
                         mx, my_y = event.pos
 
@@ -375,12 +547,33 @@ def main():
                         world_x = int(mx / BLOCK_SIZE_PX + cam_x)
                         world_y = int(my_y / BLOCK_SIZE_PX + cam_y)
 
+                        # Click derecho sobre cofre: abrir/cerrar cofre y transferir item seleccionado
+                        if event.button == 3 and world:
+                            clicked_block = world.get_block(world_x, world_y)
+                            if clicked_block == B_CHEST:
+                                cid = find_chest_at(world_x, world_y)
+                                if cid is None:
+                                    owner = net_manager.peer_id
+                                    cid = f"chest_{world_x}_{world_y}_{owner}"
+                                    chests[cid] = Chest(cid, owner, position=(world_x, world_y))
+                                    save_my_chests()
+                                open_chest_id = cid if open_chest_id != cid else None
+                                continue
+
                         action = "break" if event.button == 1 else ("place" if event.button == 3 else None)
                         if action:
 
                             if my_player.interact_block(world, world_x, world_y, action):
                                 new_b = world.get_block(world_x, world_y)
                                 net_manager.send_event("BLOCK_UPDATE", x=world_x, y=world_y, type=new_b)
+
+                                # Si acabamos de colocar un cofre localmente, crearlo también local
+                                if new_b == B_CHEST:
+                                    cid = f"chest_{world_x}_{world_y}_{net_manager.peer_id}"
+                                    if cid not in chests:
+                                        chests[cid] = Chest(cid, net_manager.peer_id, position=(world_x, world_y))
+                                        save_my_chests()
+                                        broadcast_chest_update(chests[cid])
 
         # Procesar mensajes de red entrantes
         while not msg_queue.empty():
@@ -398,6 +591,7 @@ def main():
                     players[p] = Player()
                 screen = set_opengl_mode()
                 renderer = Renderer(WIDTH, HEIGHT)
+                crafting_menu = CraftingMenu(CRAFTING_RECIPES, ITEM_NAMES)
                 current_state = STATE_GAME
                 
             elif action == "LATE_JOIN_SYNC":
@@ -421,8 +615,10 @@ def main():
                         save_all_inventories(saved_inventories)
                     # Restaurar mi propio inventario
                     restore_inventory(net_manager.peer_id)
+                    restore_chests()
                     screen = set_opengl_mode()
                     renderer = Renderer(WIDTH, HEIGHT)
+                    crafting_menu = CraftingMenu(CRAFTING_RECIPES, ITEM_NAMES)
                     current_state = STATE_GAME
 
             elif action == "BLOCK_UPDATE" and current_state == STATE_GAME:
@@ -431,6 +627,65 @@ def main():
                 b_type = msg.get("type")
                 if world and x is not None and y is not None:
                     world.set_block(x, y, b_type)
+                    
+                    # Si se colocó un cofre, crear la instancia
+                    if b_type == B_CHEST:
+                        chest_id = f"chest_{x}_{y}_{sender}"  # ID único basado en posición
+                        if chest_id not in chests:
+                            new_chest = Chest(chest_id, sender, position=(x, y))
+                            chests[chest_id] = new_chest
+                            print(f"[CHEST] Cofre creado en ({x}, {y}) por {sender}")
+                            save_my_chests()
+                    
+                    # Si cambiaron a aire en una posición con cofre, limpiar ese cofre
+                    elif b_type == B_AIR:
+                        cid = find_chest_at(x, y)
+                        if cid in chests:
+                            del chests[cid]
+                            print(f"[CHEST] Cofre destruido en ({x}, {y})")
+                            save_my_chests()
+
+            elif action == "CHEST_UPDATE" and current_state == STATE_GAME:
+                cid = msg.get("chest_id")
+                owner = msg.get("owner_peer_id")
+                pos = msg.get("position", [0, 0])
+                encrypted = msg.get("encrypted")
+                if not cid or not owner or not isinstance(pos, (list, tuple)) or len(pos) != 2:
+                    continue
+                px, py = int(pos[0]), int(pos[1])
+
+                # Reflejar que existe ese cofre como bloque del mundo
+                if world:
+                    world.set_block(px, py, B_CHEST)
+
+                # Crear/actualizar metadata local
+                if cid not in chests:
+                    chests[cid] = Chest(cid, owner, position=(px, py))
+                else:
+                    chests[cid].owner_peer_id = owner
+                    chests[cid].position = (px, py)
+
+                # Solo dueño puede descifrar contenido
+                if encrypted and owner == net_manager.peer_id:
+                    # Usar esquema híbrido para descifrar
+                    data = net_manager.decrypt_chest(encrypted)
+                    if data:
+                        restored = Chest.deserialize(data)
+                        restored.chest_id = cid
+                        restored.owner_peer_id = owner
+                        restored.position = (px, py)
+                        chests[cid] = restored
+
+                # Persistir en disco como registro cifrado por cadena
+                room_key = room_hash_display
+                if room_key not in saved_chests:
+                    saved_chests[room_key] = {}
+                saved_chests[room_key][cid] = {
+                    "owner_peer_id": owner,
+                    "position": [px, py],
+                    "encrypted": encrypted,
+                }
+                save_all_chests(saved_chests)
                     
             elif action == "PLAYER_MOVE" and current_state == STATE_GAME:
                 # Crear jugador si no lo conocíamos (reconexión o late join)
@@ -553,15 +808,23 @@ def main():
                 if int(now) % 10 == 0 and int(now) != getattr(main, '_last_inv_save', 0):
                     main._last_inv_save = int(now)
                     save_my_inventory()
+                    save_my_chests()
 
             if renderer and world:
-                renderer.render(world, players, net_manager.peer_id, input_tab_held, input_inventory_open, font_normal)
+                show_crafting = crafting_menu and crafting_menu.is_open
+                renderer.render(world, players, net_manager.peer_id, input_tab_held, input_inventory_open, show_crafting, font_normal)
+                if open_chest_id and open_chest_id in chests:
+                    my_player = players.get(net_manager.peer_id)
+                    renderer.draw_chest_popup(my_player.inventory if my_player else {}, chests[open_chest_id], font_normal)
+            
+            # Ya no necesitamos dibujar manualmente el menú de crafting, el renderer lo hace
             
         pygame.display.flip()
         clock.tick(FPS)
 
     # Guardar inventario antes de salir
     save_my_inventory()
+    save_my_chests()
     pygame.quit()
     sys.exit()
 

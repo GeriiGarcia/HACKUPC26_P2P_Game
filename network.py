@@ -6,6 +6,9 @@ import uuid
 import os
 import rsa
 import base64
+from Cryptodome.Cipher import AES
+from Cryptodome.Random import get_random_bytes
+from Cryptodome.Util.Padding import pad, unpad
 # Puertos por defecto para el juego
 DEFAULT_PORT = 14200 
 DISCOVERY_PORT = 14201
@@ -391,3 +394,63 @@ class NetworkManager:
         except Exception as e:
             print(f"[NETWORK] Error decrypting: {e}")
             return None
+
+    # ------------------------------------------------------------------
+    # Hybrid Encryption (AES + RSA) for Chests
+    # ------------------------------------------------------------------
+    def encrypt_chest(self, dict_data):
+        """
+        Esquema híbrido: 
+        1. Generar clave AES-256 aleatoria.
+        2. Encriptar dict_data con AES (CBC).
+        3. Encriptar clave AES con RSA (mi llave pública).
+        4. Retornar paquete b64(iv + aes_key_enc + content_enc).
+        """
+        if not self.public_key:
+            return None
+        try:
+            msg_bytes = json.dumps(dict_data).encode('utf-8')
+            aes_key = get_random_bytes(32) # AES-256
+            iv = get_random_bytes(16)
+            
+            # 1. AES Encrypt
+            cipher_aes = AES.new(aes_key, AES.MODE_CBC, iv)
+            encrypted_content = cipher_aes.encrypt(pad(msg_bytes, AES.block_size))
+            
+            # 2. RSA Encrypt AES Key
+            encrypted_aes_key = rsa.encrypt(aes_key, self.public_key)
+            
+            # 3. Pack everything
+            # Formato: IV (16) + KEY_ENC (64 if 512-bit RSA) + CONTENT
+            # Nota: RSA 512 produce 64 bytes de salida.
+            package = iv + encrypted_aes_key + encrypted_content
+            return base64.b64encode(package).decode('utf-8')
+        except Exception as e:
+            print(f"[NETWORK] Error hybrid encrypting: {e}")
+            return None
+
+    def decrypt_chest(self, b64_package):
+        """Desencripta el paquete híbrido con mi clave privada."""
+        if not self.private_key:
+            return None
+        try:
+            package = base64.b64decode(b64_package.encode('utf-8'))
+            
+            # Unpack: IV (16) + KEY_ENC (64) + CONTENT
+            iv = package[:16]
+            encrypted_aes_key = package[16:16+64]
+            encrypted_content = package[16+64:]
+            
+            # 1. RSA Decrypt AES Key
+            aes_key = rsa.decrypt(encrypted_aes_key, self.private_key)
+            
+            # 2. AES Decrypt Content
+            cipher_aes = AES.new(aes_key, AES.MODE_CBC, iv)
+            decrypted_padded = cipher_aes.decrypt(encrypted_content)
+            msg_bytes = unpad(decrypted_padded, AES.block_size)
+            
+            return json.loads(msg_bytes.decode('utf-8'))
+        except Exception as e:
+            print(f"[NETWORK] Error hybrid decrypting: {e}")
+            # Fallback a RSA simple si el paquete no tiene el formato esperado (compatibilidad)
+            return self.decrypt_for_me(b64_package)
