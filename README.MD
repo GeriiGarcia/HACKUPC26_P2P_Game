@@ -86,6 +86,31 @@ NetworkManager (network.py)
 ### Battleships
 ![Battleships](img/hundir_la_flota.jpeg)
 
+### Karting
+
+![Karting](img/karting.jpeg)
+
+### Minecraft
+
+![Minecraft](img/minecraft.png)
+
+### Head Soccer
+
+![Head Soccer](img/futbol.png)
+
+### Penalties
+
+![Penalties](img/penalti.png)
+
+### Mascota
+
+![Mascota](img/mascota.png)
+
+### Piano
+
+![Piano](img/piano1.png)
+![Piano2](img/piano2.png)
+
 ## Demo Videos
 
 [![Gameplay Demo](https://img.youtube.com/vi/ucMd_BHOZ1w/maxresdefault.jpg)](https://www.youtube.com/watch?v=ucMd_BHOZ1w)
