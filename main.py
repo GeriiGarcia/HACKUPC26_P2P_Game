@@ -113,7 +113,7 @@ def main():
     pygame.init()
         
     screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
-    pygame.display.set_caption("Minecraft P2P 2D")
+    pygame.display.set_caption("Friv2Friv")
     clock = pygame.time.Clock()
 
     # Basic window and UI defaults (will be adjusted later by the existing code)
@@ -1355,7 +1355,7 @@ def main():
                 pass
 
         if current_state == STATE_MENU:
-            title = font_title.render("Minecraft P2P", True, BLACK)
+            title = font_title.render("Friv2Friv", True, BLACK)
             screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//4))
             btn_create.draw(screen)
             btn_join.draw(screen)
