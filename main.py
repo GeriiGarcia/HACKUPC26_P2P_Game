@@ -74,6 +74,11 @@ try:
 except Exception:
     HeadSoccerGame = None
 
+try:
+    from main_mascota import MascotaGame
+except Exception:
+    MascotaGame = None
+
 
 INVENTORY_SAVE_FILE = "inventories.json"
 
@@ -166,12 +171,13 @@ def main():
             return False
 
     # Minimal placeholders for objects that other code expects to exist.
-    global net_manager, msg_queue, battleship_game, piano_game, minecraft_game
+    global net_manager, msg_queue, battleship_game, piano_game, minecraft_game, mascota_game
     net_manager = None
     msg_queue = queue.Queue()
     battleship_game = None
     piano_game = None
     minecraft_game = None
+    mascota_game = None
     is_host = False
 
     room_hash_display = ""
@@ -197,10 +203,14 @@ def main():
 
         if minecraft_game:
             minecraft_game.on_peer_connected(peer_id)
+        if mascota_game:
+            mascota_game.on_peer_connected(peer_id)
 
     def on_peer_disconnected(peer_id):
         if minecraft_game:
             minecraft_game.on_peer_disconnected(peer_id)
+        if mascota_game:
+            mascota_game.on_peer_disconnected(peer_id)
         print(f"[GAME] Jugador {peer_id} ha salido")
 
     # Chat state for lobby
@@ -235,7 +245,7 @@ def main():
         ("Piano", "piano"),
         ("HeadSoccer", "head_soccer"),
         ("Minecraft", "minecraft"),
-        ("Game 6", "game6"),
+        ("Mascota", "mascota"),
         ("Penaltis", "penaltis"),
         ("Game 8", "game8"),
     ]
@@ -364,10 +374,16 @@ def main():
                     net_manager = None
 
     def reset_match_state():
-        global battleship_game, piano_game, minecraft_game
+        global battleship_game, piano_game, minecraft_game, mascota_game
+        if mascota_game:
+            try:
+                mascota_game.save_my_pet()
+            except Exception:
+                pass
         battleship_game = None
         piano_game = None
         minecraft_game = None
+        mascota_game = None
 
     def return_to_main_menu():
         global current_state, net_manager, is_host
@@ -825,6 +841,18 @@ def main():
                         battleship_game = BattleshipGame(net_manager)
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
                         current_state = STATE_GAME
+                    elif selected_game == 'mascota':
+                        if MascotaGame:
+                            mascota_game = MascotaGame(screen, net_manager, clock, room_hash=room_hash_display)
+                            if net_manager:
+                                try:
+                                    players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game=selected_game)
+                                except Exception:
+                                    pass
+                            current_state = STATE_GAME
+                        else:
+                            print("MascotaGame not available.")
                     elif selected_game == 'penaltis':
                         # host starts Penaltis
                         if net_manager:
@@ -980,17 +1008,11 @@ def main():
                     elif selected_game == 'battleship':
                         battleship_game = BattleshipGame(net_manager)
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
-                    elif selected_game == 'penaltis':
-                        try:
-                            penalties_game = PenaltiesGame(net_manager, is_host=is_host, players=players_list if 'players_list' in locals() else None)
-                        except Exception:
-                            penalties_game = None
-                        battleship_game = penalties_game
-                        try:
-                            if battleship_game:
-                                battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
-                        except Exception:
-                            pass
+                    elif selected_game == 'mascota':
+                        if MascotaGame:
+                            mascota_game = MascotaGame(screen, net_manager, clock, room_hash=room_hash_display)
+                        else:
+                            print("MascotaGame not available.")
                     current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
@@ -1028,6 +1050,8 @@ def main():
                             pass
                 elif minecraft_game:
                     minecraft_game.handle_event(event)
+                elif mascota_game:
+                    mascota_game.handle_event(event)
 
         # Procesar mensajes de red entrantes
         while not msg_queue.empty():
@@ -1082,6 +1106,11 @@ def main():
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
                     except Exception:
                         battleship_game = None
+                elif g == 'mascota':
+                    if MascotaGame:
+                        mascota_game = MascotaGame(screen, net_manager, clock, room_hash=room_hash_display)
+                    else:
+                        print("MascotaGame not available.")
                 elif g == 'penaltis':
                     try:
                         players_list = msg.get('players') if isinstance(msg.get('players'), list) else None
@@ -1146,6 +1175,8 @@ def main():
 
             elif action in ("LATE_JOIN_SYNC", "BLOCK_UPDATE", "PLAYER_MOVE", "CHEST_UPDATE") and minecraft_game:
                 minecraft_game.on_message(msg)
+            elif action in ("LATE_JOIN_SYNC", "PET_UPDATE", "PET_ACTION") and mascota_game:
+                mascota_game.on_message(msg)
 
             elif msg.get("action") == "COMMIT_BOARD":
                 peer_id = msg.get("peerId")
@@ -1156,7 +1187,7 @@ def main():
             elif msg.get("action") == "GAME_SELECT":
                 # Host announced the selected game for this room
                 g = msg.get('game')
-                if g in ('battleship', 'karting', 'penaltis', 'piano', 'minecraft', 'head_soccer'):
+                if g in ('battleship', 'karting', 'penaltis', 'piano', 'minecraft', 'head_soccer', 'mascota'):
                     selected_game = g
                     print(f"[LOBBY] Juego seleccionado: {selected_game}")
                 
@@ -1529,6 +1560,10 @@ def main():
                 dt = clock.get_time() / 1000.0
                 minecraft_game.update(dt)
                 minecraft_game.draw()
+            elif mascota_game:
+                dt = clock.get_time() / 1000.0
+                mascota_game.update(dt)
+                mascota_game.draw()
 
             else:
                 # Legacy inline battleship drawing (kept for compatibility)
