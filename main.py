@@ -23,6 +23,11 @@ try:
     from piano import PianoGame
 except Exception:
     PianoGame = None
+    
+try:
+    from penaltis import PenaltiesGame
+except Exception:
+    PenaltiesGame = None
 
 
 def main():
@@ -143,7 +148,7 @@ def main():
         ("Game 4", "game4"),
         ("Game 5", "game5"),
         ("Game 6", "game6"),
-        ("Game 7", "game7"),
+        ("Penaltis", "penaltis"),
         ("Game 8", "game8"),
     ]
 
@@ -154,6 +159,9 @@ def main():
         b._game_key = key
         game_buttons.append(b)
 
+    # Map game_key -> display text for consistent labeling
+    game_label_map = {key: text for (text, key) in game_definitions}
+
     # Pagination controls for game list
     page_index = 0
     games_per_page = 4  # 2 columns x 2 rows
@@ -163,7 +171,6 @@ def main():
     btn_start_game = Button(0, 0, 300, 56, "Start", font_normal, bg_color=BLUE)
 
     btn_start_lobby = Button(0, 0, 300, 44, "Iniciar partida", font_normal, bg_color=BLUE)
-    btn_fire = Button(0, 0, 168, 44, "Fuego!", font_normal, bg_color=(200,40,40))
 
     # Join inputs (ensure exist)
     input_join_name = TextInput(WIDTH//2 - 200, HEIGHT//2 - 120, 400, 40, font_normal)
@@ -300,13 +307,16 @@ def main():
         piano_game = None
 
     def return_to_main_menu():
+
         global current_state, net_manager, is_host, battleship_game, piano_game
         if net_manager:
-            net_manager.stop()
+            try:
+                net_manager.stop()
+            except Exception:
+                pass
         net_manager = None
         is_host = False
         # clear any active battleship manager
-        global battleship_game
         battleship_game = None
         if piano_game:
             try:
@@ -337,7 +347,7 @@ def main():
         attack_label_h = font_small.get_height() + 6
         defense_label_h = font_small.get_height() + 6
         bottom_pad = 16
-        fire_h = btn_fire.rect.height
+        fire_h = 44
 
         # Espacio vertical total disponible para tableros (ataque + defensa)
         fixed_vertical = top_margin + turn_block_h + attack_label_h + defense_label_h + bottom_pad
@@ -568,7 +578,6 @@ def main():
 
         # Lobby / batalla
         btn_start_lobby.rect = pygame.Rect(WIDTH // 2 - big_btn_w // 2, HEIGHT - 68, big_btn_w, 44)
-        btn_fire.rect = pygame.Rect(WIDTH // 2 - 84, HEIGHT - 62, 168, 44)
         btn_end_to_menu.rect = pygame.Rect(WIDTH // 2 - 170, HEIGHT - 74, 340, 46)
 
         # Fase colocación: reescalar tablero para que quepa con márgenes e instrucciones
@@ -586,8 +595,6 @@ def main():
         # Fase batalla: layout reactivo sin solapes
         if battleship_game and battleship_game.my_board and battleship_game.battle_phase:
             layout = compute_battle_layout(WIDTH, HEIGHT, len(battleship_game.attack_boards))
-            btn_fire.rect.centerx = WIDTH // 2
-            btn_fire.rect.y = layout["fire_y"]
 
             battleship_game.my_board.cell_size = layout["defense_cell"]
             battleship_game.my_board.x_offset = layout["defense_x"]
@@ -736,19 +743,46 @@ def main():
                         # host starts battleship
                         if net_manager:
                             try:
-                                players_list = list(net_manager.peers.keys())
-                                net_manager.send_event("START_GAME", players=players_list, game="battleship")
+                                # include host first then peers so all clients have canonical order
+                                players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                net_manager.send_event("START_GAME", players=players_list, game=selected_game)
                             except Exception:
                                 pass
                         # initialize Battleship manager and start placement
                         battleship_game = BattleshipGame(net_manager)
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
                         current_state = STATE_GAME
+                    elif selected_game == 'penaltis':
+                        # host starts Penaltis
+                        if net_manager:
+                                try:
+                                    players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game=selected_game)
+                                except Exception:
+                                    pass
+                        # initialize Penalties manager and start
+                        try:
+                            penalties_game = PenaltiesGame(net_manager, is_host=is_host, players=players_list if 'players_list' in locals() else None)
+                        except Exception:
+                            penalties_game = None
+                        battleship_game = penalties_game
+                        try:
+                            if battleship_game:
+                                battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                        except Exception:
+                            pass
+                        current_state = STATE_GAME
                     elif selected_game == 'karting':
                         if KartGame is None:
                             print("KartGame not available (failed to import kart module).")
                         elif net_manager:
                             try:
+                                # notify peers so everyone launches the kart game
+                                try:
+                                    players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game=selected_game)
+                                except Exception:
+                                    pass
                                 game = KartGame(net_manager=net_manager)
                                 try:
                                     game.run()
@@ -829,14 +863,28 @@ def main():
                 if is_host and btn_start_lobby.handle_event(event):
                     # El host decide empezar
                     players_list = list(net_manager.peers.keys())
-                    net_manager.send_event("START_GAME", players=players_list, game=selected_game or 'battleship')
+                    try:
+                        net_manager.send_event("START_GAME", players=players_list, game=selected_game or 'battleship')
+                    except Exception:
+                        pass
+                    
                     if selected_game == 'piano':
                         piano_game = PianoGame(net_manager)
                         piano_game.build_layout(WIDTH, HEIGHT)
-                    else:
-                        # initialize Battleship manager and start placement
+                    elif selected_game == 'battleship':
                         battleship_game = BattleshipGame(net_manager)
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    elif selected_game == 'penaltis':
+                        try:
+                            penalties_game = PenaltiesGame(net_manager, is_host=is_host, players=players_list if 'players_list' in locals() else None)
+                        except Exception:
+                            penalties_game = None
+                        battleship_game = penalties_game
+                        try:
+                            if battleship_game:
+                                battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                        except Exception:
+                            pass
                     current_state = STATE_GAME
             
             elif current_state == STATE_GAME:
@@ -855,7 +903,7 @@ def main():
                     if battleship_game.battle_phase:
                         turn_owner = battleship_game.all_players_sorted[battleship_game.current_turn_index] if battleship_game.all_players_sorted else None
                         is_my_turn = (not battleship_game.game_over and turn_owner == getattr(net_manager, 'peer_id', None) and getattr(net_manager, 'peer_id', None) not in battleship_game.eliminated_players)
-                        if is_my_turn and btn_fire.handle_event(event):
+                        if is_my_turn and (event.type == pygame.KEYDOWN and (event.key == pygame.K_SPACE or event.key == pygame.K_RETURN)):
                             targets = []
                             for ab in battleship_game.attack_boards:
                                 if not ab.is_eliminated and ab.selected_coord:
@@ -865,6 +913,13 @@ def main():
                                 net_manager.send_event("FIRE_MULTI", targets=targets)
                                 battleship_game.advance_turn_to_next_alive()
                                 print("[JUEGO] Disparos enviados.")
+                        # allow the end-to-menu button to be clicked whenever the game is over
+                        try:
+                            if getattr(battleship_game, 'game_over', False):
+                                if btn_end_to_menu.handle_event(event):
+                                    return_to_main_menu()
+                        except Exception:
+                            pass
                 else:
                     # fallback to previous inline logic (if BattleshipGame not created)
                     pass
@@ -899,18 +954,66 @@ def main():
                     pass
             # fallback inline handling (kept for compatibility if battleship_game not created)
             if msg.get("action") == "START_GAME":
-                print(f"El Host ha iniciado la partida. Jugadores: {msg.get('players')}")
-                game_type = msg.get('game') or selected_game or 'battleship'
-                if game_type == 'piano':
+                g = msg.get('game') or selected_game or 'battleship'
+                print(f"El Host ha iniciado la partida. Juego: {g} Jugadores: {msg.get('players')}")
+                # ensure we clear any previous game manager before creating the new one
+                try:
+                    reset_match_state()
+                except Exception:
+                    pass
+
+                # create appropriate manager (always replace any existing)
+                if g == 'piano':
                     if not piano_game:
                         piano_game = PianoGame(net_manager)
                         piano_game.build_layout(WIDTH, HEIGHT)
-                else:
-                    # create Battleship manager if not already
-                    if not battleship_game:
+                elif g == 'battleship':
+                    try:
                         battleship_game = BattleshipGame(net_manager)
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    except Exception:
+                        battleship_game = None
+                elif g == 'penaltis':
+                    # create Penaltis manager (non-host side)
+                    try:
+                        players = msg.get('players') if isinstance(msg.get('players'), list) else None
+                        penalties_game = PenaltiesGame(net_manager, is_host=False, players=players)
+                        battleship_game = penalties_game
+                        if battleship_game:
+                            battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    except Exception:
+                        battleship_game = None
+                elif g == 'karting':
+                    try:
+                        if KartGame is None:
+                            print("KartGame not available on this client.")
+                        else:
+                            try:
+                                game = KartGame(net_manager=net_manager)
+                                try:
+                                    game.run()
+                                finally:
+                                    try:
+                                        if net_manager:
+                                            net_manager.stop()
+                                    except Exception:
+                                        pass
+                                    net_manager = None
+                                    is_host = False
+                                    current_state = STATE_MENU
+                            except Exception as e:
+                                print("Failed to start KartGame on client:", e)
+                    except Exception:
+                        pass
+                else:
+                    # unknown game, fallback to battleship
+                    try:
+                        battleship_game = BattleshipGame(net_manager)
+                        battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
+                    except Exception:
+                        battleship_game = None
                 current_state = STATE_GAME
+
             elif msg.get("action") == "COMMIT_BOARD":
                 peer_id = msg.get("peerId")
                 b_hash = msg.get("board_hash")
@@ -919,7 +1022,8 @@ def main():
             elif msg.get("action") == "GAME_SELECT":
                 # Host announced the selected game for this room
                 g = msg.get('game')
-                if g in ('battleship', 'karting', 'piano'):
+                
+                if g in ('battleship', 'karting', 'penaltis', 'piano'):
                     selected_game = g
                     print(f"[LOBBY] Juego seleccionado: {selected_game}")
                 
@@ -1187,7 +1291,9 @@ def main():
             screen.blit(title, (WIDTH//2 - title.get_width()//2, 50))
             # Show currently selected game (if any)
             if selected_game:
-                label_text = "Juego seleccionado: " + {"battleship": "Battleship", "karting": "Karting", "piano": "Piano"}.get(selected_game, selected_game or "Ninguno")
+                # Use the canonical display name if available
+                display_name = game_label_map.get(selected_game, selected_game)
+                label_text = "Juego seleccionado: " + display_name
                 lbl_sel = font_normal.render(label_text, True, DARK_BLUE)
                 screen.blit(lbl_sel, (WIDTH//2 - lbl_sel.get_width()//2, 100))
                 sel_hint = font_small.render("El host ha elegido este juego.", True, (80,80,80))
@@ -1277,11 +1383,12 @@ def main():
                     pass
 
                 # draw fire button if it's our turn
-                if getattr(battleship_game, 'battle_phase', False) and not getattr(battleship_game, 'game_over', False) and net_manager:
-                    turn_owner = battleship_game.all_players_sorted[battleship_game.current_turn_index] if battleship_game.all_players_sorted else None
-                    is_my_turn = (turn_owner == getattr(net_manager, 'peer_id', None) and getattr(net_manager, 'peer_id', None) not in battleship_game.eliminated_players)
-                    if is_my_turn:
-                        btn_fire.draw(screen)
+                    if getattr(battleship_game, 'battle_phase', False) and not getattr(battleship_game, 'game_over', False) and net_manager:
+                        turn_owner = battleship_game.all_players_sorted[battleship_game.current_turn_index] if battleship_game.all_players_sorted else None
+                        is_my_turn = (turn_owner == getattr(net_manager, 'peer_id', None) and getattr(net_manager, 'peer_id', None) not in battleship_game.eliminated_players)
+                        # fire button removed; instruct user to press Space/Enter to fire
+                        if is_my_turn:
+                            pass
 
                 # draw end-to-menu button when game over
                 if getattr(battleship_game, 'game_over', False):
@@ -1349,7 +1456,8 @@ def main():
                     my_board.draw(screen, font_small, show_status_text=False)
                     
                     if is_my_turn:
-                        btn_fire.draw(screen)
+                        # fire button removed; user can press Space/Enter to fire
+                        pass
 
                     if game_over:
                         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
