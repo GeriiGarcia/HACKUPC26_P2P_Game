@@ -6,12 +6,12 @@ import uuid
 import os
 import rsa
 import base64
-# Puertos por defecto para el juego
-DEFAULT_PORT = 14200 
-DISCOVERY_PORT = 14201
 from Cryptodome.Cipher import AES
 from Cryptodome.Random import get_random_bytes
 from Cryptodome.Util.Padding import pad, unpad
+# Puertos por defecto para el juego
+DEFAULT_PORT = 14200 
+DISCOVERY_PORT = 14201
 
 KEYS_DIR = "keys"
 
@@ -394,6 +394,10 @@ class NetworkManager:
         except Exception as e:
             print(f"[NETWORK] Error decrypting: {e}")
             return None
+
+    # ------------------------------------------------------------------
+    # Hybrid Encryption (AES + RSA) for Chests
+    # ------------------------------------------------------------------
     def encrypt_chest(self, dict_data):
         """
         Esquema híbrido: 
@@ -414,10 +418,11 @@ class NetworkManager:
             encrypted_content = cipher_aes.encrypt(pad(msg_bytes, AES.block_size))
             
             # 2. RSA Encrypt AES Key
-            # RSA 512 bits produces 64 bytes
             encrypted_aes_key = rsa.encrypt(aes_key, self.public_key)
             
             # 3. Pack everything
+            # Formato: IV (16) + KEY_ENC (64 if 512-bit RSA) + CONTENT
+            # Nota: RSA 512 produce 64 bytes de salida.
             package = iv + encrypted_aes_key + encrypted_content
             return base64.b64encode(package).decode('utf-8')
         except Exception as e:
@@ -447,5 +452,5 @@ class NetworkManager:
             return json.loads(msg_bytes.decode('utf-8'))
         except Exception as e:
             print(f"[NETWORK] Error hybrid decrypting: {e}")
-            # Fallback a RSA simple
+            # Fallback a RSA simple si el paquete no tiene el formato esperado (compatibilidad)
             return self.decrypt_for_me(b64_package)
