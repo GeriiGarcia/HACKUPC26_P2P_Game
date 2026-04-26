@@ -13,8 +13,35 @@ from pygame.locals import *
 # local UI and network helpers
 from ui import Button, TextInput
 from network import NetworkManager
-from minecraft_core import World, Player, B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT, B_GRASS, B_SAND
-from minecraft_render import Renderer, BLOCK_SIZE_PX
+
+# minecraft components are optional for the launcher and other games.
+try:
+    from minecraft_core import World, Player, B_AIR, B_DIRT, B_STONE, B_WOOD, B_WHEAT, B_GRASS, B_SAND
+except Exception:
+    World = None
+    BLOCK_SIZE_PX = 16
+    class Player:
+        def __init__(self):
+            self.inventory = {}
+            self.x = 0
+            self.y = 0
+        def serialize_inventory(self):
+            return self.inventory or {}
+
+try:
+    from minecraft_render import Renderer, BLOCK_SIZE_PX as _BP
+    # prefer real BLOCK_SIZE_PX if available
+    try:
+        BLOCK_SIZE_PX = _BP
+    except Exception:
+        pass
+except Exception:
+    class Renderer:
+        def __init__(self, w, h):
+            self.w = w
+            self.h = h
+        def render(self, *a, **k):
+            pass
 
 
 try:
@@ -36,6 +63,11 @@ try:
     from penaltis import PenaltiesGame
 except Exception:
     PenaltiesGame = None
+
+try:
+    from head_soccer import HeadSoccerGame
+except Exception:
+    HeadSoccerGame = None
 
 
 INVENTORY_SAVE_FILE = "inventories.json"
@@ -270,7 +302,7 @@ def main():
         ("Battleships", "battleship"),
         ("Karting", "karting"),
         ("Piano", "piano"),
-        ("Minecraft", "minecraft"),
+        ("HeadSoccer", "head_soccer"),
         ("Game 5", "game5"),
         ("Game 6", "game6"),
         ("Penaltis", "penaltis"),
@@ -943,6 +975,30 @@ def main():
                                     current_state = STATE_MENU
                             except Exception as e:
                                 print("Failed to start KartGame:", e)
+                    elif selected_game == 'head_soccer':
+                        if HeadSoccerGame is None:
+                            print("HeadSoccerGame not available (failed to import head_soccer module).")
+                        elif net_manager:
+                            try:
+                                # notify peers so everyone launches the head soccer game
+                                try:
+                                    players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game=selected_game)
+                                except Exception:
+                                    pass
+                                game = HeadSoccerGame(net_manager=net_manager)
+                                try:
+                                    game.run()
+                                finally:
+                                    try:
+                                        net_manager.stop()
+                                    except Exception:
+                                        pass
+                                    net_manager = None
+                                    is_host = False
+                                    current_state = STATE_MENU
+                            except Exception as e:
+                                print("Failed to start HeadSoccerGame:", e)
                     elif selected_game == 'piano':
                         if PianoGame is None:
                             print("PianoGame not available (failed to import piano module).")
@@ -1220,6 +1276,28 @@ def main():
                                 print("Failed to start KartGame on client:", e)
                     except Exception:
                         pass
+                elif g == 'head_soccer':
+                    try:
+                        if HeadSoccerGame is None:
+                            print("HeadSoccerGame not available on this client.")
+                        else:
+                            try:
+                                game = HeadSoccerGame(net_manager=net_manager)
+                                try:
+                                    game.run()
+                                finally:
+                                    try:
+                                        if net_manager:
+                                            net_manager.stop()
+                                    except Exception:
+                                        pass
+                                    net_manager = None
+                                    is_host = False
+                                    current_state = STATE_MENU
+                            except Exception as e:
+                                print("Failed to start HeadSoccerGame on client:", e)
+                    except Exception:
+                        pass
                 else:
                     # unknown game, fallback to battleship
                     try:
@@ -1281,7 +1359,7 @@ def main():
             elif msg.get("action") == "GAME_SELECT":
                 # Host announced the selected game for this room
                 g = msg.get('game')
-                if g in ('battleship', 'karting', 'penaltis', 'piano', 'minecraft'):
+                if g in ('battleship', 'karting', 'penaltis', 'piano', 'minecraft', 'head_soccer'):
                     selected_game = g
                     print(f"[LOBBY] Juego seleccionado: {selected_game}")
                 
