@@ -3,6 +3,7 @@ import sys
 import math
 import uuid
 from network import NetworkManager
+from ui import EscapeMenu
 
 # --- Constants ---
 WIDTH, HEIGHT = 800, 600
@@ -492,6 +493,15 @@ class HeadSoccerGame:
                         for p in self.players.values():
                             p.score = 0
                         self.state = "PLAYING"
+                    if event.key == pygame.K_ESCAPE:
+                        menu = EscapeMenu(self.screen, self.clock, self.font)
+                        res = menu.show()
+                        if res == "LOBBY":
+                            running = False
+                            continue
+                        elif res == "EXIT":
+                            pygame.quit()
+                            sys.exit()
                 
             self.handle_inputs()
             
@@ -561,8 +571,7 @@ class HeadSoccerGame:
             
         if self.own_network:
             self.net.stop()
-        pygame.quit()
-        # do not sys.exit() to allow embedding
+        # do not call pygame.quit() here to allow returning to main menu
 
 
 if __name__ == "__main__":

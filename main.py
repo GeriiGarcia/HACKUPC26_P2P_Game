@@ -11,7 +11,7 @@ import os
 from pygame.locals import *
 
 # local UI and network helpers
-from ui import Button, TextInput
+from ui import Button, TextInput, EscapeMenu
 from network import NetworkManager
 
 # minecraft components are optional for the launcher and other games.
@@ -98,9 +98,18 @@ def save_all_inventories(data):
     except Exception as e:
         print(f"Error guardando inventarios: {e}")
 
+# Global variables for network and games
+net_manager = None
+msg_queue = queue.Queue()
+battleship_game = None
+piano_game = None
+minecraft_game = None
+mascota_game = None
+is_host = False
+room_hash_display = ""
+
 def main():
     # All previous top-level code should be inside this main function.
-    # We'll import and initialize commonly used globals here with safe defaults.
     pygame.init()
         
     screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
@@ -171,16 +180,8 @@ def main():
             return False
 
     # Minimal placeholders for objects that other code expects to exist.
-    global net_manager, msg_queue, battleship_game, piano_game, minecraft_game, mascota_game
-    net_manager = None
-    msg_queue = queue.Queue()
-    battleship_game = None
-    piano_game = None
-    minecraft_game = None
-    mascota_game = None
-    is_host = False
-
-    room_hash_display = ""
+    global net_manager, msg_queue, battleship_game, piano_game, minecraft_game, mascota_game, is_host, room_hash_display
+    # (Global variables initialized at module level, but we need 'global' here to allow main() to assign to them)
     show_players_list = False
     
     def set_opengl_mode():
@@ -323,8 +324,8 @@ def main():
                     inp.is_active = False
 
     def handle_enter_as_confirm(state):
-        global net_manager, is_host
-        nonlocal current_state, room_hash_display
+        global net_manager, is_host, room_hash_display
+        nonlocal current_state
         # If chat input is active, send chat
         if state in (STATE_LOBBY, STATE_ROOM_CREATED):
             if chat_input and getattr(chat_input, 'is_active', False):
@@ -719,6 +720,30 @@ def main():
                     if not (current_state == STATE_GAME and minecraft_game is not None):
                         handle_enter_as_confirm(current_state)
                         continue
+                if event.key == pygame.K_ESCAPE:
+                    if current_state == STATE_GAME:
+                        # If in OpenGL mode (Minecraft), switch to 2D for the menu
+                        is_opengl = (minecraft_game is not None)
+                        if is_opengl:
+                            pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                        
+                        menu = EscapeMenu(screen, clock, font_normal)
+                        res = menu.show()
+                        
+                        if res == "RESUME":
+                            if is_opengl:
+                                screen = set_opengl_mode()
+                            continue
+                        elif res == "LOBBY":
+                            current_state = STATE_ROOM_CREATED if is_host else STATE_LOBBY
+                            reset_match_state()
+                            # ensure 2D mode
+                            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                            update_ui_layout()
+                            continue
+                        elif res == "EXIT":
+                            running = False
+                            continue
             
             if current_state == STATE_MENU:
                 if btn_create.handle_event(event):
@@ -887,14 +912,25 @@ def main():
                                 game = KartGame(net_manager=net_manager)
                                 try:
                                     game.run()
-                                finally:
-                                    try:
-                                        net_manager.stop()
-                                    except Exception:
-                                        pass
-                                    net_manager = None
-                                    is_host = False
+                                except Exception as e:
+                                    print("Failed to run KartGame:", e)
+                                
+                                # Return to lobby instead of menu, keep net_manager alive
+                                if net_manager:
+                                    net_manager.on_message_received = on_message_received
+                                    net_manager.on_peer_connected = on_peer_connected
+                                    net_manager.on_peer_disconnected = on_peer_disconnected
+                                    current_state = STATE_ROOM_CREATED if is_host else STATE_LOBBY
+                                    # re-set screen to 2D mode in case game changed it
+                                    if not pygame.get_init():
+                                        pygame.init()
+                                        update_ui_layout(reinit_fonts=True)
+                                    else:
+                                        screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                                        update_ui_layout()
+                                else:
                                     current_state = STATE_MENU
+                                    is_host = False
                             except Exception as e:
                                 print("Failed to start KartGame:", e)
                     elif selected_game == 'head_soccer':
@@ -911,14 +947,17 @@ def main():
                                 game = HeadSoccerGame(net_manager=net_manager)
                                 try:
                                     game.run()
-                                finally:
-                                    try:
-                                        net_manager.stop()
-                                    except Exception:
-                                        pass
-                                    net_manager = None
-                                    is_host = False
+                                except Exception as e:
+                                    print("Failed to run HeadSoccerGame:", e)
+                                
+                                # Return to lobby instead of menu, keep net_manager alive
+                                if net_manager:
+                                    current_state = STATE_ROOM_CREATED if is_host else STATE_LOBBY
+                                    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                                    update_ui_layout()
+                                else:
                                     current_state = STATE_MENU
+                                    is_host = False
                             except Exception as e:
                                 print("Failed to start HeadSoccerGame:", e)
                     elif selected_game == 'piano':
@@ -1130,14 +1169,22 @@ def main():
                                 try:
                                     game.run()
                                 finally:
-                                    try:
-                                        if net_manager:
-                                            net_manager.stop()
-                                    except Exception:
-                                        pass
-                                    net_manager = None
-                                    is_host = False
-                                    current_state = STATE_MENU
+                                    # Return to lobby instead of menu, keep net_manager alive
+                                    if net_manager:
+                                        net_manager.on_message_received = on_message_received
+                                        net_manager.on_peer_connected = on_peer_connected
+                                        net_manager.on_peer_disconnected = on_peer_disconnected
+                                        
+                                        current_state = STATE_ROOM_CREATED if is_host else STATE_LOBBY
+                                        if not pygame.get_init():
+                                            pygame.init()
+                                            update_ui_layout(reinit_fonts=True)
+                                        else:
+                                            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                                            update_ui_layout()
+                                    else:
+                                        current_state = STATE_MENU
+                                        is_host = False
                             except Exception as e:
                                 print("Failed to start KartGame on client:", e)
                     except Exception:
@@ -1152,14 +1199,22 @@ def main():
                                 try:
                                     game.run()
                                 finally:
-                                    try:
-                                        if net_manager:
-                                            net_manager.stop()
-                                    except Exception:
-                                        pass
-                                    net_manager = None
-                                    is_host = False
-                                    current_state = STATE_MENU
+                                    # Return to lobby instead of menu, keep net_manager alive
+                                    if net_manager:
+                                        net_manager.on_message_received = on_message_received
+                                        net_manager.on_peer_connected = on_peer_connected
+                                        net_manager.on_peer_disconnected = on_peer_disconnected
+                                        
+                                        current_state = STATE_ROOM_CREATED if is_host else STATE_LOBBY
+                                        if not pygame.get_init():
+                                            pygame.init()
+                                            update_ui_layout(reinit_fonts=True)
+                                        else:
+                                            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+                                            update_ui_layout()
+                                    else:
+                                        current_state = STATE_MENU
+                                        is_host = False
                             except Exception as e:
                                 print("Failed to start HeadSoccerGame on client:", e)
                     except Exception:
