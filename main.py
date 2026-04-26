@@ -759,6 +759,12 @@ def main():
                             print("KartGame not available (failed to import kart module).")
                         elif net_manager:
                             try:
+                                # notify peers so everyone launches the kart game
+                                try:
+                                    players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game=selected_game)
+                                except Exception:
+                                    pass
                                 game = KartGame(net_manager=net_manager)
                                 try:
                                     game.run()
@@ -932,6 +938,30 @@ def main():
                         battleship_game.start_placement(WIDTH, HEIGHT, cell_size=30)
                     except Exception:
                         battleship_game = None
+
+                # handle karting by launching the KartGame (blocking)
+                if g == 'karting':
+                    try:
+                        if KartGame is None:
+                            print("KartGame not available on this client.")
+                        else:
+                            try:
+                                game = KartGame(net_manager=net_manager)
+                                try:
+                                    game.run()
+                                finally:
+                                    try:
+                                        if net_manager:
+                                            net_manager.stop()
+                                    except Exception:
+                                        pass
+                                    net_manager = None
+                                    is_host = False
+                                    current_state = STATE_MENU
+                            except Exception as e:
+                                print("Failed to start KartGame on client:", e)
+                    except Exception:
+                        pass
 
                 current_state = STATE_GAME
             elif msg.get("action") == "COMMIT_BOARD":
