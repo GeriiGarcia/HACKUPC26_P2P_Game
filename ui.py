@@ -105,3 +105,12 @@ class TextInput:
                     # Evitar caracteres raros si se presiona Ctrl
                     if not (pygame.key.get_mods() & pygame.KMOD_CTRL):
                         self.text += event.unicode
+
+class CraftingMenu:
+    def __init__(self, recipes, item_names):
+        self.recipes = recipes
+        self.item_names = item_names
+        self.is_open = False
+
+    def toggle(self):
+        self.is_open = not self.is_open

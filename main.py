@@ -45,6 +45,11 @@ except Exception:
 
 
 try:
+    from main_minecraft import MinecraftGame
+except Exception:
+    MinecraftGame = None
+
+try:
     from BatleShip import BattleshipGame
 except Exception:
     BattleshipGame = None
@@ -161,24 +166,14 @@ def main():
             return False
 
     # Minimal placeholders for objects that other code expects to exist.
-    global net_manager, msg_queue, battleship_game, piano_game
+    global net_manager, msg_queue, battleship_game, piano_game, minecraft_game
     net_manager = None
     msg_queue = queue.Queue()
     battleship_game = None
     piano_game = None
+    minecraft_game = None
     is_host = False
 
-    # Variables de Partida Minecraft
-    world = None
-    renderer = None
-    players = {} # peer_id -> Player object
-    world_seed = 0
-    last_move_send = 0
-    input_dx = 0
-    input_jump = False
-    input_tab_held = False
-    input_inventory_open = False
-    saved_inventories = load_all_inventories()  # {room_hash: {peer_name: {inventory data}}}
     room_hash_display = ""
     show_players_list = False
     
@@ -193,56 +188,6 @@ def main():
         except Exception:
             pass
 
-    def save_my_inventory():
-        """Guarda el inventario del jugador local a disco, cifrado con su clave pública RSA."""
-        if not net_manager or not room_hash_display:
-            return
-        room_key = room_hash_display
-        if room_key not in saved_inventories:
-            saved_inventories[room_key] = {}
-        
-        # Guardar MI inventario cifrado
-        if net_manager.peer_id in players:
-            my_p = players[net_manager.peer_id]
-            inv_data = my_p.serialize_inventory()
-            encrypted = net_manager.encrypt_for_me(inv_data)
-            if encrypted:
-                saved_inventories[room_key][net_manager.peer_id] = {"encrypted": encrypted}
-            else:
-                saved_inventories[room_key][net_manager.peer_id] = inv_data
-        
-        # Guardar inventarios de OTROS jugadores en texto plano (para que al reconectar lo vean)
-        for pid, p in players.items():
-            if pid != net_manager.peer_id and p.inventory:
-                saved_inventories[room_key][pid] = p.serialize_inventory()
-        
-        save_all_inventories(saved_inventories)
-
-    def restore_inventory(peer_id):
-        """Restaura inventario guardado si existe, descifrando con clave privada."""
-        room_key = room_hash_display
-        if room_key in saved_inventories and peer_id in saved_inventories[room_key]:
-            stored = saved_inventories[room_key][peer_id]
-            if peer_id in players:
-                if isinstance(stored, dict) and "encrypted" in stored:
-                    # Descifrar con mi clave privada (solo funciona para MI inventario)
-                    if net_manager and peer_id == net_manager.peer_id:
-                        data = net_manager.decrypt_for_me(stored["encrypted"])
-                        if data:
-                            players[peer_id].deserialize_inventory(data)
-                            print(f"[INVENTARIO] Restaurado inventario cifrado de {peer_id}")
-                            return
-                    # Si no somos nosotros, no podemos descifrar (así se protege)
-                    print(f"[INVENTARIO] Inventario de {peer_id} está cifrado (solo él puede leerlo)")
-                else:
-                    # Datos en texto plano (legacy)
-                    players[peer_id].deserialize_inventory(stored)
-                    print(f"[INVENTARIO] Restaurado inventario de {peer_id}")
-
-    def get_all_saved_inventories_for_room():
-        room_key = room_hash_display
-        return saved_inventories.get(room_key, {})
-
     def on_peer_connected(peer_id):
         try:
             if selected_game and net_manager:
@@ -250,27 +195,13 @@ def main():
         except Exception:
             pass
 
-        if current_state == STATE_GAME and world:
-            # Cualquier jugador ya en partida envía el sync (no solo el host)
-            modified = world.get_modified_blocks_list()
-            inv_data = get_all_saved_inventories_for_room()
-            net_manager.send_event("LATE_JOIN_SYNC", 
-                                   target_peer=peer_id, 
-                                   seed=world_seed, 
-                                   players=list(players.keys()), 
-                                   modified_blocks=modified,
-                                   inventories=inv_data)
-            if peer_id not in players:
-                players[peer_id] = Player()
-                restore_inventory(peer_id)
+        if minecraft_game:
+            minecraft_game.on_peer_connected(peer_id)
 
     def on_peer_disconnected(peer_id):
-        """Callback cuando un peer se desconecta: guardar su inventario y quitarlo de pantalla."""
-        if peer_id in players:
-            # Guardar su inventario antes de quitarlo
-            save_my_inventory()
-            del players[peer_id]
-            print(f"[GAME] Jugador {peer_id} ha salido del juego")
+        if minecraft_game:
+            minecraft_game.on_peer_disconnected(peer_id)
+        print(f"[GAME] Jugador {peer_id} ha salido")
 
     # Chat state for lobby
     chat_messages = []  # list of (peer_id, text)
@@ -303,7 +234,7 @@ def main():
         ("Karting", "karting"),
         ("Piano", "piano"),
         ("HeadSoccer", "head_soccer"),
-        ("Game 5", "game5"),
+        ("Minecraft", "minecraft"),
         ("Game 6", "game6"),
         ("Penaltis", "penaltis"),
         ("Game 8", "game8"),
@@ -425,16 +356,7 @@ def main():
                 try:
                     net_manager = NetworkManager(room_hash, peer_id=player_name)
                     net_manager.on_message_received = on_message_received
-                    def on_peer_connected_stub(pid):
-                        if current_state == STATE_GAME and world:
-                            # Send late join sync even if not host
-                            modified = world.get_modified_blocks_list()
-                            inv_data = get_all_saved_inventories_for_room()
-                            net_manager.send_event("LATE_JOIN_SYNC", target_peer=pid, seed=world_seed, players=list(players.keys()), modified_blocks=modified, inventories=inv_data)
-                            if pid not in players:
-                                players[pid] = Player()
-                                restore_inventory(pid)
-                    net_manager.on_peer_connected = on_peer_connected_stub
+                    net_manager.on_peer_connected = on_peer_connected
                     net_manager.on_peer_disconnected = on_peer_disconnected
                     net_manager.start()
                     current_state = STATE_LOBBY
@@ -442,30 +364,13 @@ def main():
                     net_manager = None
 
     def reset_match_state():
-        global battleship_game, piano_game
-        nonlocal world, renderer, players
-        # discard any active Battleship manager and reset
-        if battleship_game:
-            try:
-                # allow BattleshipGame to perform its cleanup if it has a method
-                pass
-            except Exception:
-                pass
+        global battleship_game, piano_game, minecraft_game
         battleship_game = None
-        if piano_game:
-            try:
-                piano_game.cleanup()
-            except Exception:
-                pass
         piano_game = None
-        
-        world = None
-        renderer = None
-        players.clear()
+        minecraft_game = None
 
     def return_to_main_menu():
-
-        global current_state, net_manager, is_host, battleship_game, piano_game
+        global current_state, net_manager, is_host
         if net_manager:
             try:
                 net_manager.stop()
@@ -473,23 +378,14 @@ def main():
                 pass
         net_manager = None
         is_host = False
-        # clear any active battleship manager
-        battleship_game = None
-        if piano_game:
-            try:
-                piano_game.cleanup()
-            except Exception:
-                pass
-        piano_game = None
+        reset_match_state()
+        current_state = STATE_MENU
 
         while not msg_queue.empty():
             try:
                 msg_queue.get_nowait()
             except Exception:
-                break
-
-        reset_match_state()
-        current_state = STATE_MENU
+                pass
 
     def fit_board_cell_size(board_size_cells, max_w, max_h, max_cell, min_cell=8):
         if max_w <= 0 or max_h <= 0:
@@ -776,7 +672,7 @@ def main():
 
     running = True
     while running:
-        if not (current_state == STATE_GAME and world is not None):
+        if not (current_state == STATE_GAME and minecraft_game is not None):
             screen.fill(WHITE)
             
         if current_state != STATE_GAME:
@@ -789,10 +685,10 @@ def main():
                 new_w, new_h = clamp_window_size(*event.size)
                 if (new_w, new_h) != (WIDTH, HEIGHT):
                     WIDTH, HEIGHT = new_w, new_h
-                    if current_state == STATE_GAME and world is not None:
+                    if current_state == STATE_GAME and minecraft_game is not None:
                         screen = set_opengl_mode()
-                        if renderer:
-                            renderer.setup_opengl(WIDTH, HEIGHT)
+                        if minecraft_game and minecraft_game.renderer:
+                            minecraft_game.renderer.setup_opengl(WIDTH, HEIGHT)
                     else:
                         screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
                         update_ui_layout()
@@ -800,11 +696,13 @@ def main():
             # Global keyboard navigation: Tab to cycle inputs, Enter to confirm
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_TAB:
-                    focus_next_input(current_state)
-                    continue
+                    if not (current_state == STATE_GAME and minecraft_game is not None):
+                        focus_next_input(current_state)
+                        continue
                 if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
-                    handle_enter_as_confirm(current_state)
-                    continue
+                    if not (current_state == STATE_GAME and minecraft_game is not None):
+                        handle_enter_as_confirm(current_state)
+                        continue
             
             if current_state == STATE_MENU:
                 if btn_create.handle_event(event):
@@ -901,22 +799,18 @@ def main():
                     if selected_game is None:
                         print("Select a game first")
                     elif selected_game == 'minecraft':
-                        world_seed = random.random() * 1000
-                        try:
-                            players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
-                            net_manager.send_event("START_GAME", players=players_list, game=selected_game, seed=world_seed)
-                        except Exception:
-                            pass
-                        
-                        world = World(seed=world_seed)
-                        players.clear()
-                        players[net_manager.peer_id] = Player()
-                        for p in net_manager.peers.keys():
-                            players[p] = Player()
-                            
-                        screen = set_opengl_mode()
-                        renderer = Renderer(WIDTH, HEIGHT)
-                        current_state = STATE_GAME
+                        if MinecraftGame:
+                            minecraft_game = MinecraftGame(set_opengl_mode(), net_manager, clock, seed=random.random()*1000, room_hash=room_hash_display)
+                            # notify peers so everyone launches minecraft
+                            if net_manager:
+                                try:
+                                    players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game=selected_game, seed=minecraft_game.world_seed)
+                                except Exception:
+                                    pass
+                            current_state = STATE_GAME
+                        else:
+                            print("MinecraftGame not available.")
 
                     elif selected_game == 'battleship':
                         # host starts battleship
@@ -1025,16 +919,7 @@ def main():
                         is_host = False
                         net_manager = NetworkManager(room_hash, peer_id=player_name)
                         net_manager.on_message_received = on_message_received
-                        def on_peer_connected_stub(pid):
-                            if current_state == STATE_GAME and world:
-                                # Send late join sync even if not host
-                                modified = world.get_modified_blocks_list()
-                                inv_data = get_all_saved_inventories_for_room()
-                                net_manager.send_event("LATE_JOIN_SYNC", target_peer=pid, seed=world_seed, players=list(players.keys()), modified_blocks=modified, inventories=inv_data)
-                                if pid not in players:
-                                    players[pid] = Player()
-                                    restore_inventory(pid)
-                        net_manager.on_peer_connected = on_peer_connected_stub
+                        net_manager.on_peer_connected = on_peer_connected
                         net_manager.on_peer_disconnected = on_peer_disconnected
                         net_manager.start()
                         current_state = STATE_LOBBY
@@ -1079,18 +964,16 @@ def main():
                         pass
                     
                     if selected_game == 'minecraft':
-                        world_seed = random.random() * 1000
-                        try:
-                            net_manager.send_event("START_GAME", players=players_list, game=selected_game, seed=world_seed)
-                        except Exception:
-                            pass
-                        world = World(seed=world_seed)
-                        players.clear()
-                        players[net_manager.peer_id] = Player()
-                        for p in players_list:
-                            players[p] = Player()
-                        screen = set_opengl_mode()
-                        renderer = Renderer(WIDTH, HEIGHT)
+                        if MinecraftGame:
+                            minecraft_game = MinecraftGame(set_opengl_mode(), net_manager, clock, seed=random.random()*1000, room_hash=room_hash_display)
+                            if net_manager:
+                                try:
+                                    players_list = [net_manager.peer_id] + list(net_manager.peers.keys())
+                                    net_manager.send_event("START_GAME", players=players_list, game=selected_game, seed=minecraft_game.world_seed)
+                                except Exception:
+                                    pass
+                        else:
+                            print("MinecraftGame not available.")
                     elif selected_game == 'piano':
                         piano_game = PianoGame(net_manager)
                         piano_game.build_layout(WIDTH, HEIGHT)
@@ -1143,49 +1026,8 @@ def main():
                                     return_to_main_menu()
                         except Exception:
                             pass
-                elif world: # Minecraft handling
-                    if event.type == KEYDOWN:
-                        if event.key == K_a: input_dx = -1
-                        elif event.key == K_d: input_dx = 1
-                        elif event.key == K_SPACE: input_jump = True
-                        elif event.key == K_TAB: input_tab_held = True
-                        elif event.key == K_e: input_inventory_open = not input_inventory_open
-                        # Seleccion de items (1-4)
-                        elif event.key == K_1: players[net_manager.peer_id].selected_item = B_DIRT
-                        elif event.key == K_2: players[net_manager.peer_id].selected_item = B_STONE
-                        elif event.key == K_3: players[net_manager.peer_id].selected_item = B_WOOD
-                        elif event.key == K_4: players[net_manager.peer_id].selected_item = B_WHEAT
-                    elif event.type == KEYUP:
-                        if event.key == K_a and input_dx == -1: input_dx = 0
-                        elif event.key == K_d and input_dx == 1: input_dx = 0
-                        elif event.key == K_SPACE: input_jump = False
-                        elif event.key == K_TAB: input_tab_held = False
-                    elif event.type == MOUSEBUTTONDOWN:
-                        my_player = players.get(net_manager.peer_id)
-                        if my_player and renderer:
-                            mx, my_y = event.pos
-
-                            # --- Hotbar slot click (left button) ---
-                            if event.button == 1:
-                                clicked_item = renderer.hotbar_slot_hit(mx, my_y, my_player.inventory)
-                                if clicked_item is not None:
-                                    my_player.selected_item = clicked_item
-                                    continue  # don't process as a world click
-
-                            # --- World block interaction ---
-                            blocks_x = WIDTH / BLOCK_SIZE_PX
-                            blocks_y = HEIGHT / BLOCK_SIZE_PX
-                            cam_x = max(0, min(my_player.x - blocks_x / 2.0, 400 - blocks_x))
-                            cam_y = max(0, min(my_player.y - blocks_y / 2.0, 400 - blocks_y))
-
-                            world_x = int(mx / BLOCK_SIZE_PX + cam_x)
-                            world_y = int(my_y / BLOCK_SIZE_PX + cam_y)
-
-                            action = "break" if event.button == 1 else ("place" if event.button == 3 else None)
-                            if action:
-                                if my_player.interact_block(world, world_x, world_y, action):
-                                    new_b = world.get_block(world_x, world_y)
-                                    net_manager.send_event("BLOCK_UPDATE", x=world_x, y=world_y, type=new_b)
+                elif minecraft_game:
+                    minecraft_game.handle_event(event)
 
         # Procesar mensajes de red entrantes
         while not msg_queue.empty():
@@ -1226,15 +1068,10 @@ def main():
 
                 # create appropriate manager
                 if g == 'minecraft':
-                    world_seed = msg.get("seed", 0)
-                    world = World(seed=world_seed)
-                    players.clear()
-                    players[net_manager.peer_id] = Player()
-                    for p in msg.get("players", []):
-                        if p != net_manager.peer_id:
-                            players[p] = Player()
-                    screen = set_opengl_mode()
-                    renderer = Renderer(WIDTH, HEIGHT)
+                    if MinecraftGame:
+                        minecraft_game = MinecraftGame(set_opengl_mode(), net_manager, clock, seed=msg.get("seed"), room_hash=room_hash_display)
+                    else:
+                        print("MinecraftGame not available.")
                 elif g == 'piano':
                     if not piano_game:
                         piano_game = PianoGame(net_manager)
@@ -1307,48 +1144,8 @@ def main():
                         battleship_game = None
                 current_state = STATE_GAME
 
-            elif action == "LATE_JOIN_SYNC":
-                if msg.get("target_peer") == net_manager.peer_id and current_state != STATE_GAME:
-                    world_seed = msg.get("seed", 0)
-                    print(f"Sincronizando partida iniciada. Seed: {world_seed}")
-                    world = World(seed=world_seed)
-                    players.clear()
-                    players[net_manager.peer_id] = Player()
-                    for p in msg.get("players", []):
-                        if p != net_manager.peer_id:
-                            players[p] = Player()
-                    world.apply_modified_blocks(msg.get("modified_blocks", []))
-                    # Restaurar inventarios recibidos
-                    inv_data = msg.get("inventories", {})
-                    if inv_data:
-                        room_key = room_hash_display
-                        if room_key not in saved_inventories:
-                            saved_inventories[room_key] = {}
-                        saved_inventories[room_key].update(inv_data)
-                        save_all_inventories(saved_inventories)
-                    # Restaurar mi propio inventario
-                    restore_inventory(net_manager.peer_id)
-                    screen = set_opengl_mode()
-                    renderer = Renderer(WIDTH, HEIGHT)
-                    current_state = STATE_GAME
-
-            elif action == "BLOCK_UPDATE" and current_state == STATE_GAME:
-                x = msg.get("x")
-                y = msg.get("y")
-                b_type = msg.get("type")
-                if world and x is not None and y is not None:
-                    world.set_block(x, y, b_type)
-                    
-            elif action == "PLAYER_MOVE" and current_state == STATE_GAME:
-                # Crear jugador si no lo conocíamos (reconexión o late join)
-                if sender and sender not in players:
-                    players[sender] = Player()
-                    restore_inventory(sender)
-                if sender in players:
-                    players[sender].x = msg.get("x", players[sender].x)
-                    players[sender].y = msg.get("y", players[sender].y)
-                    players[sender].vx = msg.get("vx", players[sender].vx)
-                    players[sender].vy = msg.get("vy", players[sender].vy)
+            elif action in ("LATE_JOIN_SYNC", "BLOCK_UPDATE", "PLAYER_MOVE", "CHEST_UPDATE") and minecraft_game:
+                minecraft_game.on_message(msg)
 
             elif msg.get("action") == "COMMIT_BOARD":
                 peer_id = msg.get("peerId")
@@ -1728,32 +1525,10 @@ def main():
                 # draw end-to-menu button when game over
                 if getattr(battleship_game, 'game_over', False):
                     btn_end_to_menu.draw(screen)
-            elif world:
+            elif minecraft_game:
                 dt = clock.get_time() / 1000.0
-                my_player = players.get(net_manager.peer_id)
-                if world:
-                    for pid, p in players.items():
-                        if pid == net_manager.peer_id:
-                            p.update(dt, world, input_dx, input_jump)
-                        else:
-                            # Interpolación / Client-side prediction para movimiento fluido
-                            p.x += p.vx * dt
-                            p.y += p.vy * dt
-                            
-                if my_player and world:
-                    # Send position to other players
-                    now = time.time()
-                    if now - last_move_send > 0.05: # Send 20 times a second
-                        net_manager.send_event("PLAYER_MOVE", x=my_player.x, y=my_player.y, vx=my_player.vx, vy=my_player.vy)
-                        last_move_send = now
-                    
-                    # Auto-save inventory every 10 seconds
-                    if int(now) % 10 == 0 and int(now) != getattr(main, '_last_inv_save', 0):
-                        main._last_inv_save = int(now)
-                        save_my_inventory()
-
-                if renderer and world:
-                    renderer.render(world, players, net_manager.peer_id, input_tab_held, input_inventory_open, font_normal)
+                minecraft_game.update(dt)
+                minecraft_game.draw()
 
             else:
                 # Legacy inline battleship drawing (kept for compatibility)
@@ -1863,7 +1638,8 @@ def main():
         clock.tick(FPS)
 
     # Guardar inventario antes de salir
-    save_my_inventory()
+    if minecraft_game:
+        minecraft_game.save_my_inventory()
     pygame.quit()
     sys.exit()
 
