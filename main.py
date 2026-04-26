@@ -282,6 +282,8 @@ def main():
     
     # Elemento UI - Fin de partida
     btn_end_to_menu = Button(WIDTH//2 - 140, HEIGHT - 80, 280, 44, "Volver al menú principal", font_normal, bg_color=BLUE, hover_color=DARK_BLUE)
+    # Botón de disparo para Battleship
+    btn_fire = Button(0, 0, 200, 44, "¡FUEGO!", font_normal, bg_color=(200, 40, 40), hover_color=(255, 60, 60))
 
     def clamp_window_size(w, h):
         return max(MIN_WIDTH, w), max(MIN_HEIGHT, h)
@@ -681,6 +683,10 @@ def main():
                 ab.x_offset = layout["attack_start_x"] + i * (12 * layout["attack_cell"] + layout["attack_gap"])
                 ab.y_offset = layout["attack_y"]
 
+            # Posición del botón de fuego
+            btn_fire.rect.x = WIDTH // 2 - btn_fire.rect.width // 2
+            btn_fire.rect.y = layout["fire_y"]
+
             if battleship_game.game_over:
                 panel_w = min(560, max(360, WIDTH - 120))
                 panel_h = min(420, max(260, HEIGHT - 120))
@@ -1073,7 +1079,14 @@ def main():
                     if battleship_game.battle_phase:
                         turn_owner = battleship_game.all_players_sorted[battleship_game.current_turn_index] if battleship_game.all_players_sorted else None
                         is_my_turn = (not battleship_game.game_over and turn_owner == getattr(net_manager, 'peer_id', None) and getattr(net_manager, 'peer_id', None) not in battleship_game.eliminated_players)
-                        if is_my_turn and (event.type == pygame.KEYDOWN and (event.key == pygame.K_SPACE or event.key == pygame.K_RETURN)):
+                        fire_requested = (event.type == pygame.KEYDOWN and (event.key == pygame.K_SPACE or event.key == pygame.K_RETURN))
+                        if not fire_requested:
+                            try:
+                                fire_requested = btn_fire.handle_event(event)
+                            except Exception:
+                                pass
+
+                        if is_my_turn and fire_requested:
                             targets = []
                             for ab in battleship_game.attack_boards:
                                 if not ab.is_eliminated and ab.selected_coord:
@@ -1607,9 +1620,8 @@ def main():
                 if getattr(battleship_game, 'battle_phase', False) and not getattr(battleship_game, 'game_over', False) and net_manager:
                     turn_owner = battleship_game.all_players_sorted[battleship_game.current_turn_index] if battleship_game.all_players_sorted else None
                     is_my_turn = (turn_owner == getattr(net_manager, 'peer_id', None) and getattr(net_manager, 'peer_id', None) not in battleship_game.eliminated_players)
-                    # fire button removed; instruct user to press Space/Enter to fire
                     if is_my_turn:
-                        pass
+                        btn_fire.draw(screen)
 
                 # draw end-to-menu button when game over
                 if getattr(battleship_game, 'game_over', False):
@@ -1685,8 +1697,7 @@ def main():
                     my_board.draw(screen, font_small, show_status_text=False)
                     
                     if is_my_turn:
-                        # fire button removed; user can press Space/Enter to fire
-                        pass
+                        btn_fire.draw(screen)
 
                     if game_over:
                         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
