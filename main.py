@@ -484,6 +484,10 @@ def main():
                     # Primero, clics del UI del cofre (click-to-transfer)
                     if open_chest_id and open_chest_id in chests and my_player and renderer and event.button == 1:
                         open_chest = chests[open_chest_id]
+                        # Seguridad: solo el dueño puede interactuar
+                        if open_chest.owner_peer_id != net_manager.peer_id:
+                            open_chest_id = None
+                            continue
                         hit = renderer.chest_ui_hit(event.pos[0], event.pos[1], my_player.inventory, open_chest.inventory)
                         if hit:
                             side, item_id = hit
@@ -547,17 +551,20 @@ def main():
                         world_x = int(mx / BLOCK_SIZE_PX + cam_x)
                         world_y = int(my_y / BLOCK_SIZE_PX + cam_y)
 
-                        # Click derecho sobre cofre: abrir/cerrar cofre y transferir item seleccionado
+                        # Click derecho sobre cofre: abrir/cerrar cofre si es nuestro
                         if event.button == 3 and world:
                             clicked_block = world.get_block(world_x, world_y)
                             if clicked_block == B_CHEST:
                                 cid = find_chest_at(world_x, world_y)
-                                if cid is None:
-                                    owner = net_manager.peer_id
-                                    cid = f"chest_{world_x}_{world_y}_{owner}"
-                                    chests[cid] = Chest(cid, owner, position=(world_x, world_y))
-                                    save_my_chests()
-                                open_chest_id = cid if open_chest_id != cid else None
+                                if cid is not None:
+                                    chest = chests[cid]
+                                    if chest.owner_peer_id != net_manager.peer_id:
+                                        print(f"[CHEST] Este cofre pertenece a {chest.owner_peer_id}")
+                                        continue
+                                    open_chest_id = cid if open_chest_id != cid else None
+                                else:
+                                    # Caso raro: bloque existe pero no la metadata
+                                    pass
                                 continue
 
                         action = "break" if event.button == 1 else ("place" if event.button == 3 else None)
