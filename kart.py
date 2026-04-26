@@ -177,8 +177,9 @@ class KartGame:
             def _on_msg(msg):
                 try:
                     action = msg.get('action')
-                    peer = msg.get('peerId')
-                    if not peer or peer == self.net.peer_id:
+                    peer = msg.get('peerId') or msg.get('peer_id')
+                    # be tolerant: if no explicit peer in the payload, skip processing
+                    if not peer or (self.net and peer == self.net.peer_id):
                         return
                     if action == 'STATE':
                         tx = float(msg.get('x', 0.0))
@@ -221,24 +222,81 @@ class KartGame:
                                 pass
                             p['last_seen'] = now_t
                             # keep p['render_x']/render_y unchanged; smoothing will move them towards target
-                        # if peer reports finished via separate event it will be handled below
                     elif action == 'PLAYER_ELIMINATED':
                         if peer in self.opponents:
                             self.opponents[peer]['eliminated'] = True
-                        elif action == 'PLAYER_FINISHED':
-                            # remote peer declared finish; try to read explicit winner id
-                            winner = msg.get('winner') or peer
-                            if winner not in self.finishing_order:
-                                self.finishing_order.append(winner)
-                            # set race_over so overlay shows
-                            self.race_over = True
-                            # first finisher is winner if we don't already have one
-                            if not self.race_winner:
-                                self.race_winner = self.finishing_order[0]
+                    elif action == 'PLAYER_FINISHED':
+                        # remote peer declared finish; try to read explicit winner id
+                        winner = msg.get('winner') or peer
+                        if winner not in self.finishing_order:
+                            self.finishing_order.append(winner)
+                        # set race_over so overlay shows
+                        self.race_over = True
+                        # first finisher is winner if we don't already have one
+                        if not self.race_winner and self.finishing_order:
+                            self.race_winner = self.finishing_order[0]
+                    else:
+                        # unexpected/other actions: ignore but keep debug print for diagnostics
+                        pass
                 except Exception:
                     pass
 
             self.net.on_message_received = _on_msg
+
+            # Pre-populate opponents from any peers NetworkManager already knows about
+            try:
+                for p in list(self.net.peers.keys()):
+                    if p and p != getattr(self.net, 'peer_id', None) and p not in self.opponents:
+                        self.opponents[p] = {
+                            'x_target': self.player.x,
+                            'y_target': self.player.y,
+                            'render_x': self.player.x,
+                            'render_y': self.player.y,
+                            'render_direction': self.player.direction,
+                            'last_seen': time.time(),
+                            'eliminated': False,
+                            'car': self._assign_car_to_peer(p),
+                            'lap_count': 0,
+                        }
+            except Exception:
+                pass
+
+            # Hook into on_peer_connected to add opponents as soon as TCP handshake completes
+            def _on_peer_connected_local(pid):
+                try:
+                    if pid and pid not in self.opponents:
+                        self.opponents[pid] = {
+                            'x_target': self.player.x,
+                            'y_target': self.player.y,
+                            'render_x': self.player.x,
+                            'render_y': self.player.y,
+                            'render_direction': self.player.direction,
+                            'last_seen': time.time(),
+                            'eliminated': False,
+                            'car': self._assign_car_to_peer(pid),
+                            'lap_count': 0,
+                        }
+                except Exception:
+                    pass
+
+            try:
+                prev = getattr(self.net, 'on_peer_connected', None)
+                def combined_peer_connected(pid):
+                    try:
+                        if prev:
+                            try:
+                                prev(pid)
+                            except Exception:
+                                pass
+                        _on_peer_connected_local(pid)
+                    except Exception:
+                        pass
+                self.net.on_peer_connected = combined_peer_connected
+            except Exception:
+                try:
+                    self.net.on_peer_connected = _on_peer_connected_local
+                except Exception:
+                    pass
 
         self.running = False
 
