@@ -1,0 +1,13 @@
+{
+  "name": "hackupc26-p2p-piano",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Simple P2P piano bridge using Hyperswarm",
+  "main": "pear_p2p.js",
+  "scripts": {
+    "start": "node pear_p2p.js"
+  },
+  "dependencies": {
+    "hyperswarm": "^4.7.14"
+  }
+}

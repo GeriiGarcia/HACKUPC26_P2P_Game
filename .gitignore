@@ -1,5 +1,5 @@
 __pycache__/
-.venv/
-__pycache__/ui.cpython-312.pyc
-keys/
+keys/*
 inventories.json
+.venv/
+
