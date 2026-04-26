@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HackUPC P2P Game - WASM</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+    <style>
+        body {
+            background-color: #2c2c2c;
+            color: white;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: sans-serif;
+        }
+        #canvas-container {
+            margin-top: 20px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        #status {
+            margin: 10px;
+            font-size: 0.8em;
+            color: #aaa;
+        }
+        #bridge-debug {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 5px;
+            width: 80%;
+            max-width: 800px;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 0.9em;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Mascota P2P (WASM)</h1>
+    <div id="status">Cargando Pygbag...</div>
+    
+    <div id="canvas-container">
+        <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    </div>
+
+    <div id="bridge-debug">
+        <h3>Bridge Debug</h3>
+        <div id="logs"></div>
+    </div>
+
+    <script src="wasm_bridge.js"></script>
+    <script>
+        // Interceptar logs para el debug visual
+        const oldLog = console.log;
+        const logContainer = document.getElementById('logs');
+        console.log = function(...args) {
+            oldLog(...args);
+            const msg = args.join(' ');
+            if (msg.includes('[BRIDGE]')) {
+                const line = document.createElement('div');
+                line.textContent = msg;
+                logContainer.appendChild(line);
+                document.getElementById('bridge-debug').style.display = 'block';
+            }
+        };
+
+        // Pygbag boot configuration
+        window.onload = function() {
+            document.getElementById('status').textContent = "Iniciando engine...";
+        };
+    </script>
+</body>
+</html>
