@@ -6,6 +6,7 @@ import math
 import json
 import os
 import time
+from ui import EscapeMenu
 
 WIDTH, HEIGHT = 800, 600
 FPS = 60
@@ -108,6 +109,7 @@ class KartGame:
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("Pygame Kart - P2P")
         self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont(None, 24)
 
         # Load assets
         self.tile_dot1 = pygame.image.load(ASSETS_DIR + "imatges/tilemap2/dot1.png").convert()
@@ -588,6 +590,16 @@ class KartGame:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        menu = EscapeMenu(self.screen, self.clock, self.font)
+                        res = menu.show()
+                        if res == "LOBBY":
+                            self.running = False
+                            continue
+                        elif res == "EXIT":
+                            pygame.quit()
+                            sys.exit()
 
             # If race over, stop updating gameplay but keep drawing and handling quit
             if not self.race_over:

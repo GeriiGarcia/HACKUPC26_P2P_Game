@@ -647,14 +647,20 @@ class BattleshipGame:
             screen.blit(turn_lbl, (width//2 - turn_lbl.get_width()//2, 40))
             # attack boards
             # Use offsets provided by caller (main layout); only apply defaults when offsets are unset (0)
-            y = 100
-            for ab in self.attack_boards:
+            attack_total_w = len(self.attack_boards) * (BOARD_SIZE * 25 + 20) - 20
+            start_x = max(20, width//2 - attack_total_w//2)
+            
+            for i, ab in enumerate(self.attack_boards):
                 if not getattr(ab, 'x_offset', 0):
-                    ab.x_offset = max(20, width//2 - (BOARD_SIZE * ab.cell_size)//2)
-                if not getattr(ab, 'y_offset', 0):
-                    ab.y_offset = y
+                    # Fallback: distribute horizontally if they fit, otherwise vertically
+                    if attack_total_w < width - 40:
+                        ab.x_offset = start_x + i * (BOARD_SIZE * ab.cell_size + 20)
+                        ab.y_offset = 100
+                    else:
+                        ab.x_offset = max(20, width//2 - (BOARD_SIZE * ab.cell_size)//2)
+                        ab.y_offset = 100 + i * (BOARD_SIZE * ab.cell_size + 30)
+                
                 ab.draw(screen, font_small, is_their_turn=(ab.target_peer_id == turn_player))
-                y += BOARD_SIZE*ab.cell_size + 12
             # defense board
             if self.my_board:
                 defense_label_y = self.my_board.y_offset - font_small.get_height() - 6
