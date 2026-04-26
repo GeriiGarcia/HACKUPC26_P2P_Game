@@ -542,7 +542,10 @@ def main():
         }
 
     def update_ui_layout():
-        if current_state == STATE_GAME:
+        # Only skip layout if in a game that handles its own layout (like Minecraft) 
+        # or if we are not in a state that requires global UI updates.
+        # Battleship requires global layout updates for window resizing and multi-player board positioning.
+        if current_state == STATE_GAME and minecraft_game is not None:
             return
             
         # Menú principal
@@ -692,7 +695,7 @@ def main():
         if not (current_state == STATE_GAME and minecraft_game is not None):
             screen.fill(WHITE)
             
-        if current_state != STATE_GAME:
+        if current_state != STATE_GAME or (battleship_game is not None):
             update_ui_layout()
         
         for event in pygame.event.get():
